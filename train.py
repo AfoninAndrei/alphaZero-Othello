@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 
-from MCTS_orig import MCTS
+from MCTS_model import MCTS
 from eval import evaluate_models
 
 
