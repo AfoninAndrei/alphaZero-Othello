@@ -17,7 +17,8 @@ def test_train():
         'num_iterations': 2,
         'num_self_play': 2,
         'num_epochs': 2,
-        'eval_win_threshold': 0.55
+        'num_eval_matches': 4,
+        'eval_win_margin': 0.05
     }
 
     train_args.update(mcts_args)

@@ -24,13 +24,11 @@ def test_mcts_for_forced_win():
 
     mcts = MCTS(env, args, None, True)
     # It's player=1's turn
-    action_probs = mcts.policy_improve_step(state, init_player=1, temp=0.1)
+    action_probs = mcts.policy_improve_step(state, init_player=1, temp=0.0)
 
     # The best move should be action=2 for an immediate win.
     # Let's see if MCTS strongly favors that move:
     best_action = np.argmax(action_probs)
-    print("Action probabilities:", action_probs)
-    print("Best action chosen =", best_action)
 
     assert best_action == 2, "MCTS did not choose the winning move!"
 
@@ -60,6 +58,7 @@ def play_mcts_vs_random(args):
             possible_actions = np.where(valid_moves == 1)[0]
             action = np.random.choice(possible_actions)
 
+        mcts.make_move(action)
         state = env.get_next_state(state, action, current_player)
         value, done = env.get_value_and_terminated(state, action)
         if done:

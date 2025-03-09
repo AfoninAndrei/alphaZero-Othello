@@ -15,9 +15,9 @@ class Trainer:
         self.env = env
         self.args = args
         self.policy = policy
-        self.mcts = MCTS(self.env, self.args, self.policy, False)
 
-        self.best_mcts = copy.deepcopy(self.mcts)
+        self.best_policy = copy.deepcopy(self.policy)
+        self.best_policy.eval()
 
         self.value_loss = nn.MSELoss()
         self.optimizer = torch.optim.Adam(
@@ -27,6 +27,16 @@ class Trainer:
 
         self.current_training_data = []
         self.dataloader = None
+
+        self.metrics_history = {
+            'policy_loss': [],
+            'value_loss': [],
+            'total_loss': [],
+            'current_win_rate': [],
+            'best_win_rate': []
+        }
+
+        self.self_play_history = {'reward': [], 'winner': []}
 
     def clean_training_data(self):
         self.current_training_data = []
@@ -56,31 +66,28 @@ class Trainer:
                                      batch_size=self.args['batch_size'],
                                      shuffle=True)
 
-        self.metrics_history = {
-            'policy_loss': [],
-            'value_loss': [],
-            'total_loss': []
-        }
-
     @torch.no_grad()
     def self_play(self):
         # same as rollout, but the policy is not random
         trajectory = []
 
         state = self.env.get_initial_state()
-        player = 1
+        player, is_terminal = 1, False
+        mcts = MCTS(self.env, self.args, self.best_policy, False)
         while True:
-            action_probs = self.best_mcts.policy_improve_step(
+            action_probs = mcts.policy_improve_step(
                 state, player, temp=self.args['mcts_temperature'])
             trajectory.append(
                 (state.flatten().copy(), action_probs.copy(), player))
 
             action = np.random.choice(self.env.action_size, p=action_probs)
+            mcts.make_move(action)
             state = self.env.get_next_state(state, action, player)
             reward, is_terminal = self.env.get_value_and_terminated(
                 state, action)
 
             if is_terminal:
+
                 # update the rewards based on outcome
                 for i, (st, pol, ply) in enumerate(trajectory):
                     # If the stored 'ply' is the same as the final winner's 'player',
@@ -91,6 +98,9 @@ class Trainer:
                     trajectory[i] = (st, pol, outcome)
 
                 # Accumulate the entire game data
+                if reward != 0:
+                    self.self_play_history['winner'].append(player)
+                self.self_play_history['reward'].append(reward)
                 self.current_training_data += trajectory
                 return
 
@@ -149,15 +159,24 @@ class Trainer:
             self.eval()
 
     def eval(self):
+        # TODO: do we actually make the tree here stateless? In alphaZero they play 400 games
+        # hence it should be statefull?
         self.policy.eval()
-        current_win_rate = evaluate_models(self.env,
-                                           self.mcts,
-                                           self.best_mcts,
-                                           n_matches=20)
+        current_win_rate, best_win_rate = evaluate_models(
+            self.env,
+            self.args,
+            self.policy,
+            self.best_policy,
+            n_matches=self.args['num_eval_matches'])
 
-        print(f"Win Rate vs Best: {current_win_rate*100:.1f}%")
+        print(
+            f"Win Rate Current {current_win_rate*100:.1f}% vs Win rate Best: {best_win_rate*100:.1f}%"
+        )
 
-        # If better than eval_win_threshold% for instance, accept new model as best
-        if current_win_rate > self.args['eval_win_threshold']:
+        self.metrics_history['current_win_rate'].append(current_win_rate)
+        self.metrics_history['best_win_rate'].append(best_win_rate)
+
+        # If better than the best model by a margin, accept new model as best
+        if current_win_rate - self.args['eval_win_margin'] > best_win_rate:
             print("Replacing best model with current model")
-            self.best_mcts = copy.deepcopy(self.mcts)
+            self.best_policy = copy.deepcopy(self.policy)

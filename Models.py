@@ -55,9 +55,6 @@ class TicTacToeNet(nn.Module):
         value: float in [–1, +1], from this player's perspective
         """
         # Flatten the board to shape (9,)
-        # Possibly multiply by 'player' if you want the network
-        # always from +1's perspective. Let's do that:
-        # board_input = (state.flatten() * player).astype(np.float32)
         board_input = state.flatten().astype(np.float32)
         board_input = torch.from_numpy(board_input).unsqueeze(0)  # shape (1,9)
 

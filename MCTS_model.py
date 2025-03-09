@@ -2,6 +2,8 @@ import math
 import numpy as np
 from typing import Dict, Any, List
 
+np.random.seed(888)
+
 EPS = 1e-8
 
 
@@ -37,6 +39,8 @@ class Node:
         if self.action is not None:
             self.terminal_value, self.is_terminal = self.env.get_value_and_terminated(
                 self.state, self.action)
+            # it is a terminal state, then the prev player actually won
+            self.terminal_value *= -1
         else:
             # For the root, there was no "last action".
             self.terminal_value = 0
@@ -52,9 +56,6 @@ class Node:
     def is_leaf(self) -> bool:
         return len(self.children) == 0
 
-    def is_fully_expanded(self) -> bool:
-        return len(self.children) == len(self.valid_actions)
-
     def _get_ucb_score(self, action: int, prior: float) -> float:
         if action not in self.children:
             score = self.args['c_puct'] * prior * math.sqrt(self.visit_count +
@@ -62,7 +63,7 @@ class Node:
             return score
 
         child = self.children[action]
-        score = child.value + self.args['c_puct'] * child.prior * \
+        score = - child.value + self.args['c_puct'] * child.prior * \
                         math.sqrt(self.visit_count + EPS) / (1 + child.visit_count)
         return score
 
@@ -104,27 +105,44 @@ class MCTS:
         # we need policy if not rollout
         if not self.use_rollout:
             assert self.policy is not None
+        # Keep a persistent tree (root) between moves.
+        self.root = None
+
+    def make_move(self, action):
+        # this assumes that env is deterministic
+        if not self.root:
+            # in case we play 2nd and it is the 1st move
+            return
+        self.root = self.root.children[action]
+        # detach from the above tree
+        self.root.parent = None
 
     def policy_improve_step(self,
                             init_state,
                             init_player: int,
                             temp=1) -> List[float]:
         # start the tree from the current state
-        root_node = Node(env=self.env,
-                         args=self.args,
-                         state=init_state.copy(),
-                         player=init_player,
-                         action=None)
+        # we need to reuse already computed statistics
+        if self.root is None:
+            self.root = Node(env=self.env,
+                             args=self.args,
+                             state=init_state.copy(),
+                             player=init_player,
+                             action=None)
+        else:
+            # assrt if there is a descepancy between game state and tree state
+            assert np.all(self.root.state == init_state)
+            assert self.root.player == init_player
 
         for _ in range(self.args['num_simulations']):
             # simulate until the leaf node
-            self._simulate(root_node)
+            self._simulate(self.root)
 
         counts = np.zeros(self.num_actions, dtype=np.float32)
-        for action, child_node in root_node.children.items():
+        for action, child_node in self.root.children.items():
             counts[action] = child_node.visit_count
 
-        if abs(temp) < 1e-8:
+        if abs(temp) < 1e-1:
             # Choose the action(s) with the highest visit_count
             best_actions = np.where(counts == counts.max())[0]
             best_action = np.random.choice(best_actions)
@@ -136,7 +154,7 @@ class MCTS:
             norm = np.sum(counts_exp)
             if norm < 1e-12:
                 # If everything is zero, pick uniformly from valid actions
-                valid_actions = root_node.valid_actions
+                valid_actions = self.root.valid_actions
                 if len(valid_actions) == 0:
                     # Terminal node => no moves
                     probs = np.zeros(self.num_actions, dtype=np.float32)
@@ -217,10 +235,10 @@ class MCTS:
         best_score = -float('inf')
         best_action = None
         for action in node.valid_actions:
-            if action in node.children:
-                prior = node.children[action].prior
-            else:
+            if action not in node.children:
                 continue
+
+            prior = node.children[action].prior
             score = node._get_ucb_score(action, prior)
             if score > best_score:
                 best_score = score
