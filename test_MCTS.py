@@ -1,6 +1,9 @@
 import numpy as np
 from TicTacToeEnv import TicTacToe
 from MCTS_model import MCTS
+from test_cases_TicTacToe import (test_occupied_moves_not_chosen,
+                                  test_move_after_middle_x, test_defence,
+                                  test_move_for_current_board)
 
 
 def test_mcts_for_forced_win():
@@ -33,6 +36,24 @@ def test_mcts_for_forced_win():
     assert best_action == 2, "MCTS did not choose the winning move!"
 
     print("Test passed: MCTS found the forced win move at (0,2).")
+
+
+def test_strategies():
+    env = TicTacToe()
+    args = {
+        'c_puct': 1.0,
+        'num_simulations':
+        200  # Increase to ensure MCTS can discover the forced win
+    }
+    mcts = MCTS(env, args, None, True)
+    inference_fn_probs = lambda x: mcts.policy_improve_step(
+        x, init_player=1, temp=0.0)
+    inference_fn_argmax = lambda x: np.argmax(inference_fn_probs(x))
+
+    test_occupied_moves_not_chosen(inference_fn_argmax)
+    # reset the tree
+    mcts.root = None
+    test_defence(inference_fn_argmax)
 
 
 def play_mcts_vs_random(args):
@@ -101,3 +122,4 @@ def test_mcts_vs_random_win_rate():
 if __name__ == "__main__":
     test_mcts_for_forced_win()
     test_mcts_vs_random_win_rate()
+    test_strategies()
