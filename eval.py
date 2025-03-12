@@ -72,11 +72,12 @@ def play_match(env, mcts_first, mcts_second):
         mcts_first.make_move(action)
         mcts_second.make_move(action)
         state = env.get_next_state(state, action, player)
-        reward, done = env.get_value_and_terminated(state, action)
+        reward, done = env.get_value_and_terminated(state, action, player)
         if done:
+            winner = np.sign(reward)
             # Assume reward=1 means the last mover won.
-            if reward == 1.0:
-                return "A" if player == 1 else "B"
+            if abs(reward) == 1.0:
+                return "A" if winner == 1 else "B"
             else:
                 return "Draw"
         player = env.get_opponent(player)

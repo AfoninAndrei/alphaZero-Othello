@@ -38,9 +38,9 @@ class Node:
 
         if self.action is not None:
             self.terminal_value, self.is_terminal = self.env.get_value_and_terminated(
-                self.state, self.action)
+                self.state, self.action, -player)
             # it is a terminal state, then the prev player actually won
-            self.terminal_value *= -1
+            self.terminal_value = -abs(self.terminal_value)
         else:
             # For the root, there was no "last action".
             self.terminal_value = 0
@@ -188,10 +188,12 @@ class MCTS:
             current_state = self.env.get_next_state(current_state, action,
                                                     current_player)
             terminal_value, is_terminal = self.env.get_value_and_terminated(
-                current_state, action)
+                current_state, action, current_player)
 
             if is_terminal:
-                return terminal_value if current_player == player else -terminal_value
+                winner = np.sign(terminal_value)
+                return abs(terminal_value
+                           ) if winner == player else -abs(terminal_value)
 
             current_player = self.env.get_opponent(current_player)
 

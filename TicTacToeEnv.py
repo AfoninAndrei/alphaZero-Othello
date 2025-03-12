@@ -38,9 +38,9 @@ class TicTacToe:
             return True
         return False
 
-    def get_value_and_terminated(self, state, action):
+    def get_value_and_terminated(self, state, action, current_player):
         if self.check_win(state, action):
-            return 1, True
+            return current_player, True
         if np.sum(self.get_valid_moves(state)) == 0:
             return 0, True
         return 0, False

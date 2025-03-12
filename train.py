@@ -8,7 +8,11 @@ import numpy as np
 from MCTS_model import MCTS
 from eval import evaluate_models
 
+# TODO: Check the whole logic, the rewards, etc
+# After that we can switch to the Othello training
 
+
+# TODO: Update the reward to -1, 1 to fit the general setting
 class Trainer:
 
     def __init__(self, env, args, policy):
@@ -84,16 +88,17 @@ class Trainer:
             mcts.make_move(action)
             state = self.env.get_next_state(state, action, player)
             reward, is_terminal = self.env.get_value_and_terminated(
-                state, action)
+                state, action, player)
 
             if is_terminal:
+                winner = np.sign(reward)
 
                 # update the rewards based on outcome
                 for i, (st, pol, ply) in enumerate(trajectory):
                     # If the stored 'ply' is the same as the final winner's 'player',
                     # that entry sees 'reward' as +1 (or 0),
                     # else sees 'reward' as -1 (or 0).
-                    outcome = reward if (ply == player) else -reward
+                    outcome = abs(reward) if (ply == winner) else -abs(reward)
                     # We replace 'player' with the final outcome
                     trajectory[i] = (st, pol, outcome)
 

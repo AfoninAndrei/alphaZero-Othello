@@ -81,11 +81,14 @@ def play_mcts_vs_random(args):
 
         mcts.make_move(action)
         state = env.get_next_state(state, action, current_player)
-        value, done = env.get_value_and_terminated(state, action)
+        value, done = env.get_value_and_terminated(state, action,
+                                                   current_player)
         if done:
-            if value == 1.0 and current_player == 1:
+            if value > 0:
+                assert current_player == 1
                 return "MCTS"
-            elif value == 1.0 and current_player == -1:
+            elif value < 0:
+                assert current_player == -1
                 return "Random"
             else:
                 return "Draw"
