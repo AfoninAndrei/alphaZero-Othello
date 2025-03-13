@@ -52,7 +52,6 @@ def play_match(env, mcts_first, mcts_second):
     state = env.get_initial_state()
     player = 1  # always start with +1
 
-    # TODO: this has deterministic outcome, do we need to run it many times?
     while True:
         valid_moves = env.get_valid_moves(state)
         if valid_moves.sum() == 0:

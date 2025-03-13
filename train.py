@@ -8,11 +8,7 @@ import numpy as np
 from MCTS_model import MCTS
 from eval import evaluate_models
 
-# TODO: Check the whole logic, the rewards, etc
-# After that we can switch to the Othello training
 
-
-# TODO: Update the reward to -1, 1 to fit the general setting
 class Trainer:
 
     def __init__(self, env, args, policy):
@@ -164,8 +160,6 @@ class Trainer:
             self.eval()
 
     def eval(self):
-        # TODO: do we actually make the tree here stateless? In alphaZero they play 400 games
-        # hence it should be statefull?
         self.policy.eval()
         current_win_rate, best_win_rate = evaluate_models(
             self.env,

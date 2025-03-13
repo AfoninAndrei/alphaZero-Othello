@@ -140,6 +140,7 @@ class MCTS:
 
         counts = np.zeros(self.num_actions, dtype=np.float32)
         for action, child_node in self.root.children.items():
+            # vist count is reused from prev simulations
             counts[action] = child_node.visit_count
 
         if abs(temp) < 1e-1:
