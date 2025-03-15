@@ -209,8 +209,7 @@ class MCTS:
             priors = np.ones(self.num_actions, dtype=np.float32)
             leaf_value = self._rollout(leaf.state, leaf.player)
         else:
-            # TODO: we need to adjust the board according to player
-            priors, leaf_value = self.policy.inference(leaf.state)
+            priors, leaf_value = self.policy.inference(leaf.state, leaf.player)
 
         # Zero out invalid moves
         priors *= leaf.valid_mask

@@ -32,8 +32,8 @@ def test_train():
     alphaZero = Trainer(env, train_args, policy)
     alphaZero.train()
 
-    inference_fn_probs = lambda x: policy.inference(x)[0]
-    inference_fn_argmax = lambda x: np.argmax(inference_fn_probs(x))
+    inference_fn_probs = lambda x, pl: policy.inference(x, pl)[0]
+    inference_fn_argmax = lambda x, pl: np.argmax(inference_fn_probs(x, pl))
 
     test_occupied_moves_not_chosen(inference_fn_argmax)
     test_move_after_middle_x(inference_fn_probs)

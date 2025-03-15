@@ -10,7 +10,7 @@ def test_occupied_moves_not_chosen(inference_fn_argmax):
     # X | X | O
     # ---------
     # O |   |
-    move = inference_fn_argmax(board)
+    move = inference_fn_argmax(board, 1)
     assert move not in (0, 2), (
         f"Model predicted an illegal/occupied move: {move}")
 
@@ -24,7 +24,7 @@ def test_defence(inference_fn_argmax):
     #   | X |
     # ---------
     # O |   |
-    move = inference_fn_argmax(board)
+    move = inference_fn_argmax(board, -1)
     assert move == 8, (f"Model predicted a bad move: {move}")
 
 
@@ -42,7 +42,7 @@ def test_move_after_middle_x(inference_fn_probs):
     #   |   |
 
     # Get probabilities from the inference function
-    probs = inference_fn_probs(board)
+    probs = inference_fn_probs(board, -1)
     top_4_indices = np.argsort(probs)[-4:]
     expected_top = {0, 2, 6, 8}  # Preferred corner moves
 
@@ -66,7 +66,7 @@ def test_move_for_current_board(inference_fn_probs):
     #   |   | X
 
     # Get probabilities from the inference function
-    probs = inference_fn_probs(board)
+    probs = inference_fn_probs(board, -1)
     top_4_indices = np.argsort(probs)[-4:]
     expected_top = {1, 3, 5, 7}
 

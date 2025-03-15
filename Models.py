@@ -10,19 +10,13 @@ class Inference:
 
     def inference(self,
                   state: np.ndarray,
+                  current_player: int,
                   use_gpu: bool = False) -> Union[np.ndarray, float]:
         """
-        Runs the model to get policy and value for a single TicTacToe state.
-
-        :param model: a trained (or untrained) TicTacToeNet
-        :param state: np.ndarray shape (3,3) with values in {–1, 0, +1}
-        :param use_gpu: if True, move data to GPU before forward pass
-        :return: (policy, value)
-        policy: shape [9] numpy array of probabilities (not masked yet)
-        value: float in [–1, +1], from this player's perspective
+        Runs the model to get policy and value for a single state.
         """
         # Flatten the board to shape (9,)
-        board_input = state.astype(np.float32)
+        board_input = (current_player * state).astype(np.float32)
         board_input = torch.from_numpy(board_input).unsqueeze(0)  # shape (1,9)
 
         if use_gpu:
@@ -91,21 +85,22 @@ class OthelloNet(nn.Module, Inference):
         self.board_size = board_size
         self.action_size = action_size
 
-        # Convolutional layers: input channel=1 (board values: -1,0,1)
+        # Convolutional layers: input channel=1 (board values: in canonical form {-1,0,1})
         self.conv1 = nn.Conv2d(
-            1, 64, kernel_size=3,
-            padding=1)  # output shape: [batch, 64, board_size, board_size]
-        self.conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+            1, 32, kernel_size=3,
+            padding=1)  # output: [batch, 32, board_size, board_size]
+        self.conv2 = nn.Conv2d(
+            32, 32, kernel_size=3,
+            padding=1)  # output: [batch, 32, board_size, board_size]
 
-        flatten_dim = 64 * board_size * board_size
+        # Compute flattened dimension dynamically.
+        flatten_dim = 32 * board_size * board_size
 
-        # Policy head: flatten and map to action logits.
+        # Policy head: maps flattened conv output to action logits.
         self.fc_policy = nn.Linear(flatten_dim, action_size)
 
-        # Value head: flatten, hidden layer, and output a single scalar.
-        self.fc_value1 = nn.Linear(flatten_dim, 64)
-        self.fc_value2 = nn.Linear(64, 1)
+        # Value head: a smaller hidden layer then output a scalar value.
+        self.fc_value1 = nn.Linear(flatten_dim, 32)
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x: torch.Tensor):

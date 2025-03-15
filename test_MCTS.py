@@ -44,9 +44,9 @@ def test_strategies():
         200  # Increase to ensure MCTS can discover the forced win
     }
     mcts = MCTS(env, args, None, True)
-    inference_fn_probs = lambda x: mcts.policy_improve_step(
-        x, init_player=1, temp=0.0)
-    inference_fn_argmax = lambda x: np.argmax(inference_fn_probs(x))
+    inference_fn_probs = lambda x, pl: mcts.policy_improve_step(
+        x, init_player=pl, temp=0.0)
+    inference_fn_argmax = lambda x, pl: np.argmax(inference_fn_probs(x, pl))
 
     test_occupied_moves_not_chosen(inference_fn_argmax)
     # reset the tree

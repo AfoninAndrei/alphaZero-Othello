@@ -77,7 +77,8 @@ class Trainer:
         while True:
             action_probs = mcts.policy_improve_step(
                 state, player, temp=self.args['mcts_temperature'])
-            trajectory.append((state.copy(), action_probs.copy(), player))
+            trajectory.append(
+                (state.copy() * player, action_probs.copy(), player))
 
             action = np.random.choice(self.env.action_size, p=action_probs)
             mcts.make_move(action)
