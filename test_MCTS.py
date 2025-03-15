@@ -60,7 +60,7 @@ def play_mcts_vs_random(args):
 
     state = env.get_initial_state()
     # it is harder to win if you start second
-    current_player = -1
+    current_player = 1
 
     while True:
         valid_moves = env.get_valid_moves(state, current_player)
@@ -68,9 +68,11 @@ def play_mcts_vs_random(args):
             # no moves => draw
             return "Draw"
 
-        if current_player == 1:
+        if current_player == -1:
             # MCTS picks action
-            action_probs = mcts.policy_improve_step(state, 1, temp=0.0)
+            action_probs = mcts.policy_improve_step(state,
+                                                    current_player,
+                                                    temp=0.0)
             action = np.argmax(action_probs)
         else:
             # random picks action
@@ -84,10 +86,10 @@ def play_mcts_vs_random(args):
         if done:
             if reward == 1:
                 # current player wins
-                return "MCTS" if current_player == 1 else "Random"
+                return "MCTS" if current_player == -1 else "Random"
             elif reward == -1:
                 # current player loses; so opponent wins
-                return "Random" if current_player == 1 else "MCTS"
+                return "Random" if current_player == -1 else "MCTS"
             else:
                 return "Draw"
         current_player = env.get_opponent(current_player)
