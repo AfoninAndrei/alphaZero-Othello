@@ -1,4 +1,5 @@
 import sys
+import torch
 import numpy as np
 import pygame  # Needed for the pygame.time.wait() call.
 from MCTS_model import MCTS
@@ -32,13 +33,15 @@ def choose_move(state, current_player, env, mcts, ui):
         return ui.get_human_move(valid_moves)
 
 
-def play_human_vs_mcts(policy):
+def play_human_vs_mcts():
     # Parameters for MCTS.
     args = {'c_puct': 1.0, 'num_simulations': 100, 'mcts_temperature': 1.0}
     board_size = 5  # 5x5 board.
     env = OthelloGame(board_size)
     # For computer moves, we use an MCTS instance.
-    mcts = MCTS(env, args, None, True)
+    model_path = "othello_policy_5x5.pt"
+    ploicy = torch.load(model_path)
+    mcts = MCTS(env, args, ploicy, False)
 
     # Initialize the UI.
     ui = OthelloUI(board_size)
@@ -80,4 +83,4 @@ def play_human_vs_mcts(policy):
 
 if __name__ == "__main__":
     # Replace None with your actual policy instance if available.
-    play_human_vs_mcts(None)
+    play_human_vs_mcts()
