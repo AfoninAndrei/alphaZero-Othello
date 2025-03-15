@@ -33,14 +33,13 @@ class Node:
         self.children: Dict[Any, Node] = {}
 
         # Valid actions from this state
-        self.valid_mask = self.env.get_valid_moves(self.state)
+        self.valid_mask = self.env.get_valid_moves(self.state, player)
         self.valid_actions = np.nonzero(self.valid_mask)[0]
 
         if self.action is not None:
+            # Previous player actually made last move
             self.terminal_value, self.is_terminal = self.env.get_value_and_terminated(
-                self.state, self.action, -player)
-            # it is a terminal state, then the prev player actually won
-            self.terminal_value = -abs(self.terminal_value)
+                self.state, self.action, player)
         else:
             # For the root, there was no "last action".
             self.terminal_value = 0
@@ -179,7 +178,8 @@ class MCTS:
         current_state = state.copy()
         current_player = player
         while True:
-            valid_moves = self.env.get_valid_moves(current_state)
+            valid_moves = self.env.get_valid_moves(current_state,
+                                                   current_player)
             possible_actions = np.where(valid_moves == 1)[0]
             if len(possible_actions) == 0:
                 # board is full => draw
@@ -188,13 +188,12 @@ class MCTS:
             action = np.random.choice(possible_actions)
             current_state = self.env.get_next_state(current_state, action,
                                                     current_player)
+            # we need to eval from the initial player perspective
             terminal_value, is_terminal = self.env.get_value_and_terminated(
-                current_state, action, current_player)
+                current_state, action, player)
 
             if is_terminal:
-                winner = np.sign(terminal_value)
-                return abs(terminal_value
-                           ) if winner == player else -abs(terminal_value)
+                return terminal_value
 
             current_player = self.env.get_opponent(current_player)
 
@@ -204,11 +203,13 @@ class MCTS:
         Then expand *all valid actions* (or a subset if you prefer).
         Finally, backprop the value to the leaf.
         """
+        # get leaf value from the leaf player perspective
         if self.use_rollout:
             # uniform prior and value from MC estimation
             priors = np.ones(self.num_actions, dtype=np.float32)
             leaf_value = self._rollout(leaf.state, leaf.player)
         else:
+            # TODO: we need to adjust the board according to player
             priors, leaf_value = self.policy.inference(leaf.state)
 
         # Zero out invalid moves

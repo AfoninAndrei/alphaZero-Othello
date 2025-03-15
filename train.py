@@ -36,7 +36,7 @@ class Trainer:
             'best_win_rate': []
         }
 
-        self.self_play_history = {'reward': [], 'winner': []}
+        self.self_play_history = {'winner': []}
 
     def clean_training_data(self):
         self.current_training_data = []
@@ -51,8 +51,8 @@ class Trainer:
         policies = []
         values = []
         for (s, p, v) in self.current_training_data:
-            states.append(s)  # (9,) float
-            policies.append(p)  # (9,) float
+            states.append(s)  # 2D array: shape (board_size, board_size)
+            policies.append(p)  # policy vector, shape (action_size,)
             values.append(v)  # scalar
 
         states = np.array(states, dtype=np.float32)
@@ -77,8 +77,7 @@ class Trainer:
         while True:
             action_probs = mcts.policy_improve_step(
                 state, player, temp=self.args['mcts_temperature'])
-            trajectory.append(
-                (state.flatten().copy(), action_probs.copy(), player))
+            trajectory.append((state.copy(), action_probs.copy(), player))
 
             action = np.random.choice(self.env.action_size, p=action_probs)
             mcts.make_move(action)
@@ -87,21 +86,21 @@ class Trainer:
                 state, action, player)
 
             if is_terminal:
-                winner = np.sign(reward)
+                if reward > 0:
+                    winning_player = player
+                elif reward < 0:
+                    winning_player = self.env.get_opponent(player)
+                else:
+                    winning_player = 0
 
                 # update the rewards based on outcome
                 for i, (st, pol, ply) in enumerate(trajectory):
-                    # If the stored 'ply' is the same as the final winner's 'player',
-                    # that entry sees 'reward' as +1 (or 0),
-                    # else sees 'reward' as -1 (or 0).
-                    outcome = abs(reward) if (ply == winner) else -abs(reward)
-                    # We replace 'player' with the final outcome
+                    outcome = 1 if ply == winning_player else (
+                        -1 if winning_player != 0 else 0)
                     trajectory[i] = (st, pol, outcome)
 
                 # Accumulate the entire game data
-                if reward != 0:
-                    self.self_play_history['winner'].append(player)
-                self.self_play_history['reward'].append(reward)
+                self.self_play_history['winner'].append(player)
                 self.current_training_data += trajectory
                 return
 
@@ -146,6 +145,8 @@ class Trainer:
 
     def train(self):
         for _ in range(self.args['num_iterations']):
+            # TODO: do we actually need to clean data here?
+            # we do not seem to converge
             self.clean_training_data()
 
             # self-play
@@ -159,6 +160,7 @@ class Trainer:
 
             self.eval()
 
+    # TODO: Why aren't we improving here?
     def eval(self):
         self.policy.eval()
         current_win_rate, best_win_rate = evaluate_models(
