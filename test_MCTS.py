@@ -1,9 +1,7 @@
 import numpy as np
-from TicTacToeEnv import TicTacToe
+from envs.tic_tac_toe import TicTacToe
 from MCTS_model import MCTS
-from test_cases_TicTacToe import (test_occupied_moves_not_chosen,
-                                  test_move_after_middle_x, test_defence,
-                                  test_move_for_current_board)
+from test_cases_TicTacToe import (test_occupied_moves_not_chosen, test_defence)
 
 
 def test_mcts_for_forced_win():
@@ -65,7 +63,7 @@ def play_mcts_vs_random(args):
     current_player = -1
 
     while True:
-        valid_moves = env.get_valid_moves(state)
+        valid_moves = env.get_valid_moves(state, current_player)
         if valid_moves.sum() == 0:
             # no moves => draw
             return "Draw"
@@ -81,18 +79,17 @@ def play_mcts_vs_random(args):
 
         mcts.make_move(action)
         state = env.get_next_state(state, action, current_player)
-        value, done = env.get_value_and_terminated(state, action,
-                                                   current_player)
+        reward, done = env.get_value_and_terminated(state, action,
+                                                    current_player)
         if done:
-            if value > 0:
-                assert current_player == 1
-                return "MCTS"
-            elif value < 0:
-                assert current_player == -1
-                return "Random"
+            if reward == 1:
+                # current player wins
+                return "MCTS" if current_player == 1 else "Random"
+            elif reward == -1:
+                # current player loses; so opponent wins
+                return "Random" if current_player == 1 else "MCTS"
             else:
                 return "Draw"
-
         current_player = env.get_opponent(current_player)
 
 

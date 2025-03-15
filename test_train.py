@@ -2,7 +2,7 @@ import numpy as np
 
 from train import Trainer
 from Models import TicTacToeNet
-from TicTacToeEnv import TicTacToe
+from envs.tic_tac_toe import TicTacToe
 from test_cases_TicTacToe import (test_occupied_moves_not_chosen,
                                   test_move_after_middle_x, test_defence,
                                   test_move_for_current_board)
