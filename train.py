@@ -9,6 +9,12 @@ from MCTS_model import MCTS
 from eval import evaluate_models
 
 
+def infinite_dataloader(dataloader):
+    while True:
+        for batch in dataloader:
+            yield batch
+
+
 class Trainer:
 
     def __init__(self, env, args, policy):
@@ -41,11 +47,23 @@ class Trainer:
     def clean_training_data(self):
         self.current_training_data = []
 
+    def _take_freshest_training_data(self):
+        """
+        Keep only the most recent max_samples training examples.
+        Since we're only using fresh samples, this simply truncates
+        the list to at most max_samples entries.
+        """
+        max_train_samples = self.args['max_train_samples']
+        if len(self.current_training_data) > max_train_samples:
+            self.current_training_data = self.current_training_data[
+                -max_train_samples:]
+
     def setup_dataloader(self):
         """
         Convert self.current_training_data (list of (state, policy, value))
         into a PyTorch DataLoader for training.
         """
+        self._take_freshest_training_data()
 
         states = []
         policies = []
@@ -107,13 +125,16 @@ class Trainer:
 
             player = self.env.get_opponent(player)
 
-    def train_epoch(self):
+    def train_iters(self):
         self.policy.train()
         total_policy_loss = 0.0
         total_value_loss = 0.0
         total_batches = 0
 
-        for (state, target_policy, target_value) in self.dataloader:
+        dataloader_iter = infinite_dataloader(self.dataloader)
+
+        for _ in range(self.args['train_steps_per_iter']):
+            state, target_policy, target_value = next(dataloader_iter)
             # predict
             policy_logits, value = self.policy(state)
             # compute policy loss
@@ -146,9 +167,7 @@ class Trainer:
 
     def train(self):
         for _ in range(self.args['num_iterations']):
-            # TODO: do we actually need to clean data here?
-            # we do not seem to converge
-            self.clean_training_data()
+            # self.clean_training_data()
 
             # self-play
             for _ in range(self.args['num_self_play']):
@@ -156,12 +175,10 @@ class Trainer:
 
             # train
             self.setup_dataloader()
-            for _ in range(self.args['num_epochs']):
-                self.train_epoch()
+            self.train_iters()
 
             self.eval()
 
-    # TODO: Why aren't we improving here?
     def eval(self):
         self.policy.eval()
         current_win_rate, best_win_rate = evaluate_models(

@@ -86,12 +86,9 @@ class OthelloNet(nn.Module, Inference):
         self.action_size = action_size
 
         # Convolutional layers: input channel=1 (board values: in canonical form {-1,0,1})
-        self.conv1 = nn.Conv2d(
-            1, 32, kernel_size=3,
-            padding=1)  # output: [batch, 32, board_size, board_size]
-        self.conv2 = nn.Conv2d(
-            32, 32, kernel_size=3,
-            padding=1)  # output: [batch, 32, board_size, board_size]
+        self.backbone = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=3, padding=1), nn.ReLU(),
+            nn.Conv2d(32, 32, kernel_size=3, padding=1), nn.ReLU())
 
         # Compute flattened dimension dynamically.
         flatten_dim = 32 * board_size * board_size
@@ -101,6 +98,7 @@ class OthelloNet(nn.Module, Inference):
 
         # Value head: a smaller hidden layer then output a scalar value.
         self.fc_value1 = nn.Linear(flatten_dim, 32)
+        self.fc_value2 = nn.Linear(32, 1)
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(self, x: torch.Tensor):
@@ -116,9 +114,7 @@ class OthelloNet(nn.Module, Inference):
                 1)  # Now shape: [batch_size, 1, board_size, board_size]
 
         # Apply convolutional layers with ReLU activations.
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
+        x = self.backbone(x)
 
         # Flatten feature maps.
         x_flat = x.view(x.size(0), -1)
