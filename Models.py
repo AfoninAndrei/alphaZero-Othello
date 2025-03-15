@@ -6,7 +6,44 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-class TicTacToeNet(nn.Module):
+class Inference:
+
+    def inference(self,
+                  state: np.ndarray,
+                  use_gpu: bool = False) -> Union[np.ndarray, float]:
+        """
+        Runs the model to get policy and value for a single TicTacToe state.
+
+        :param model: a trained (or untrained) TicTacToeNet
+        :param state: np.ndarray shape (3,3) with values in {–1, 0, +1}
+        :param use_gpu: if True, move data to GPU before forward pass
+        :return: (policy, value)
+        policy: shape [9] numpy array of probabilities (not masked yet)
+        value: float in [–1, +1], from this player's perspective
+        """
+        # Flatten the board to shape (9,)
+        board_input = state.astype(np.float32)
+        board_input = torch.from_numpy(board_input).unsqueeze(0)  # shape (1,9)
+
+        if use_gpu:
+            board_input = board_input.cuda()
+
+        # Evaluate
+        self.eval()
+        with torch.no_grad():
+            policy_logits, value = self(board_input)
+            policy = self.softmax(policy_logits)
+            # policy_logits -> shape (1,9)
+            # value -> shape (1,1)
+
+        # Convert to numpy
+        policy = policy[0].cpu().numpy()  # shape (9,)
+        value = value[0, 0].cpu().numpy().item()  # scalar
+
+        return policy, value
+
+
+class TicTacToeNet(nn.Module, Inference):
 
     def __init__(self, state_size, output_size):
         super().__init__()
@@ -31,6 +68,7 @@ class TicTacToeNet(nn.Module):
           value shape: [batch_size, 1]
         """
         # Basic MLP
+        x = x.flatten(start_dim=1)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
 
@@ -41,36 +79,60 @@ class TicTacToeNet(nn.Module):
 
         return policy_logits, value
 
-    def inference(self,
-                  state: np.ndarray,
-                  use_gpu: bool = False) -> Union[np.ndarray, float]:
+
+class OthelloNet(nn.Module, Inference):
+
+    def __init__(self, board_size: int, action_size: int):
         """
-        Runs the model to get policy and value for a single TicTacToe state.
-
-        :param model: a trained (or untrained) TicTacToeNet
-        :param state: np.ndarray shape (3,3) with values in {–1, 0, +1}
-        :param use_gpu: if True, move data to GPU before forward pass
-        :return: (policy, value)
-        policy: shape [9] numpy array of probabilities (not masked yet)
-        value: float in [–1, +1], from this player's perspective
+        :param board_size: size of the board (e.g., 8 for an 8x8 board)
+        :param action_size: number of actions (board_size*board_size + 1 for the "pass" move)
         """
-        # Flatten the board to shape (9,)
-        board_input = state.flatten().astype(np.float32)
-        board_input = torch.from_numpy(board_input).unsqueeze(0)  # shape (1,9)
+        super().__init__()
+        self.board_size = board_size
+        self.action_size = action_size
 
-        if use_gpu:
-            board_input = board_input.cuda()
+        # Convolutional layers: input channel=1 (board values: -1,0,1)
+        self.conv1 = nn.Conv2d(
+            1, 64, kernel_size=3,
+            padding=1)  # output shape: [batch, 64, board_size, board_size]
+        self.conv2 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, padding=1)
 
-        # Evaluate
-        self.eval()
-        with torch.no_grad():
-            policy_logits, value = self(board_input)
-            policy = self.softmax(policy_logits)
-            # policy_logits -> shape (1,9)
-            # value -> shape (1,1)
+        flatten_dim = 64 * board_size * board_size
 
-        # Convert to numpy
-        policy = policy[0].cpu().numpy()  # shape (9,)
-        value = value[0, 0].cpu().numpy().item()  # scalar
+        # Policy head: flatten and map to action logits.
+        self.fc_policy = nn.Linear(flatten_dim, action_size)
 
-        return policy, value
+        # Value head: flatten, hidden layer, and output a single scalar.
+        self.fc_value1 = nn.Linear(flatten_dim, 64)
+        self.fc_value2 = nn.Linear(64, 1)
+        self.softmax = nn.Softmax(dim=-1)
+
+    def forward(self, x: torch.Tensor):
+        """
+        :param x: tensor of shape [batch_size, board_size, board_size] with values in {-1, 0, +1}.
+        :return: tuple (policy_logits, value)
+                 - policy_logits: tensor of shape [batch_size, action_size]
+                 - value: tensor of shape [batch_size, 1] in range (-1, +1)
+        """
+        # If x is missing the channel dimension, add it.
+        if x.dim() == 3:
+            x = x.unsqueeze(
+                1)  # Now shape: [batch_size, 1, board_size, board_size]
+
+        # Apply convolutional layers with ReLU activations.
+        x = F.relu(self.conv1(x))
+        x = F.relu(self.conv2(x))
+        x = F.relu(self.conv3(x))
+
+        # Flatten feature maps.
+        x_flat = x.view(x.size(0), -1)
+
+        # Policy head: outputs logits for each action.
+        policy_logits = self.fc_policy(x_flat)
+
+        # Value head: hidden layer, then a tanh squashing to produce value in (-1, +1).
+        value = F.relu(self.fc_value1(x_flat))
+        value = torch.tanh(self.fc_value2(value))
+
+        return policy_logits, value
