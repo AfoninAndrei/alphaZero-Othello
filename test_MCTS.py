@@ -23,7 +23,7 @@ def test_mcts_for_forced_win():
         200  # Increase to ensure MCTS can discover the forced win
     }
 
-    mcts = MCTS(env, args, None, True)
+    mcts = MCTS(env, args, None)
     # It's player=1's turn
     action_probs = mcts.policy_improve_step(state, init_player=1, temp=0.0)
 
@@ -43,7 +43,7 @@ def test_strategies():
         'num_simulations':
         200  # Increase to ensure MCTS can discover the forced win
     }
-    mcts = MCTS(env, args, None, True)
+    mcts = MCTS(env, args, None)
     inference_fn_probs = lambda x, pl: mcts.policy_improve_step(
         x, init_player=pl, temp=0.0)
     inference_fn_argmax = lambda x, pl: np.argmax(inference_fn_probs(x, pl))
@@ -56,7 +56,7 @@ def test_strategies():
 
 def play_mcts_vs_random(args):
     env = TicTacToe()
-    mcts = MCTS(env, args, None, True)
+    mcts = MCTS(env, args, None)
 
     state = env.get_initial_state()
     # it is harder to win if you start second

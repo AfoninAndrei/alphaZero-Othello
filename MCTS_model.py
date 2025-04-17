@@ -2,8 +2,6 @@ import math
 import numpy as np
 from typing import Dict, Any, List
 
-np.random.seed(888)
-
 EPS = 1e-8
 
 
@@ -95,15 +93,23 @@ class Node:
 
 class MCTS:
 
-    def __init__(self, env, args, policy, use_rollout=False):
+    def __init__(self,
+                 env,
+                 args,
+                 policy,
+                 dirichlet_alpha=0.03,
+                 dirichlet_epsilon=0.0):
         self.env = env
         self.args = args
         self.policy = policy
-        self.use_rollout = use_rollout
+        self.use_rollout = False
         self.num_actions = self.env.action_size
+        self.dirichlet_alpha = dirichlet_alpha
+        self.dirichlet_epsilon = dirichlet_epsilon
         # we need policy if not rollout
-        if not self.use_rollout:
-            assert self.policy is not None
+        if self.policy is None:
+            self.use_rollout = True
+
         # Keep a persistent tree (root) between moves.
         self.root = None
 
@@ -210,6 +216,12 @@ class MCTS:
             leaf_value = self._rollout(leaf.state, leaf.player)
         else:
             priors, leaf_value = self.policy.inference(leaf.state, leaf.player)
+
+        # add exploration noise
+        if leaf == self.root and self.dirichlet_epsilon > 0:
+            noise = np.random.dirichlet([self.dirichlet_alpha] * len(priors))
+            priors = (1 - self.dirichlet_epsilon
+                      ) * priors + self.dirichlet_epsilon * noise
 
         # Zero out invalid moves
         priors *= leaf.valid_mask

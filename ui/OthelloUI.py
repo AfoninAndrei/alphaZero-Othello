@@ -32,10 +32,10 @@ class OthelloUI:
             for col in range(self.board_size):
                 center = (col * self.cell_size + self.cell_size // 2,
                           row * self.cell_size + self.cell_size // 2)
-                if board[row, col] == 1:
+                if board[row, col] == -1:
                     pygame.draw.circle(self.screen, WHITE, center,
                                        self.cell_size // 2 - 5)
-                elif board[row, col] == -1:
+                elif board[row, col] == 1:
                     pygame.draw.circle(self.screen, BLACK, center,
                                        self.cell_size // 2 - 5)
 

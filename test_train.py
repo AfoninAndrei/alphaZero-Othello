@@ -14,7 +14,7 @@ def play_policy_vs_rollout(inference_fn_probs, args, policy_player):
     # reasonable performance w/o MCTS
     env = TicTacToe()
     # Create the rollout agent.
-    mcts = MCTS(env, args, None, True)
+    mcts = MCTS(env, args, None)
 
     state = env.get_initial_state()  # Shape: (board_size, board_size)
     current_player = 1  # Let the policy play as player 1.

@@ -14,7 +14,7 @@ def choose_move(state, current_player, env, mcts, ui):
       - For the human (player -1), use the UI to get input.
     """
     valid_moves = env.get_valid_moves(state, current_player)
-    if current_player == 1:
+    if current_player == -1:
         action_probs = mcts.policy_improve_step(state,
                                                 current_player,
                                                 temp=0.0)
@@ -35,13 +35,13 @@ def choose_move(state, current_player, env, mcts, ui):
 
 def play_human_vs_mcts():
     # Parameters for MCTS.
-    args = {'c_puct': 1.0, 'num_simulations': 100, 'mcts_temperature': 1.0}
-    board_size = 5  # 5x5 board.
+    args = {'c_puct': 2.0, 'num_simulations': 100, 'mcts_temperature': 1.0}
+    board_size = 6  # 5x5 board.
     env = OthelloGame(board_size)
     # For computer moves, we use an MCTS instance.
-    model_path = "othello_policy_5x5.pt"
-    ploicy = torch.load(model_path)
-    mcts = MCTS(env, args, ploicy, False)
+    model_path = "othello_policy_6x6.pt"
+    policy = torch.load(model_path)
+    mcts = MCTS(env, args, policy)
 
     # Initialize the UI.
     ui = OthelloUI(board_size)

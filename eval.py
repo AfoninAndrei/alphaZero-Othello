@@ -19,16 +19,16 @@ def evaluate_models(env, args, policy, best_policy, n_matches=20):
 
         if i % 2 == 0:
             # Even game: mcts_a plays as +1, mcts_b as -1.
-            result = play_match(env, MCTS(env, args, policy, False),
-                                MCTS(env, args, best_policy, False))
+            result = play_match(env, MCTS(env, args, policy),
+                                MCTS(env, args, best_policy))
             if result == "A":
                 wins_a += 1
             elif result == "B":
                 wins_b += 1
         else:
             # Odd game: swap roles: mcts_b plays as +1, mcts_a as -1.
-            result = play_match(env, MCTS(env, args, best_policy, False),
-                                MCTS(env, args, policy, False))
+            result = play_match(env, MCTS(env, args, best_policy),
+                                MCTS(env, args, policy))
             # In this case, "A" means the first tree (mcts_b) wins,
             # so from mcts_a’s perspective, that is a loss.
             if result == "A":

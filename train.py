@@ -7,6 +7,8 @@ import numpy as np
 
 from MCTS_model import MCTS
 from eval import evaluate_models
+from Models import FastOthelloNet
+from envs.othello import OthelloGame
 
 
 def infinite_dataloader(dataloader):
@@ -21,9 +23,11 @@ class Trainer:
         self.env = env
         self.args = args
         self.policy = policy
+        self.num_simulations = self.args['num_simulations']
 
-        self.best_policy = copy.deepcopy(self.policy)
-        self.best_policy.eval()
+        self.device = torch.device("cpu")
+        self.policy.to(self.device)
+        self.best_policy = self.policy
 
         self.value_loss = nn.MSELoss()
         self.optimizer = torch.optim.Adam(
@@ -39,7 +43,9 @@ class Trainer:
             'value_loss': [],
             'total_loss': [],
             'current_win_rate': [],
-            'best_win_rate': []
+            'best_win_rate': [],
+            'current_win_rate_rollout': [],
+            'best_win_rate_rollout': []
         }
 
         self.self_play_history = {'winner': []}
@@ -47,23 +53,11 @@ class Trainer:
     def clean_training_data(self):
         self.current_training_data = []
 
-    def _take_freshest_training_data(self):
-        """
-        Keep only the most recent max_samples training examples.
-        Since we're only using fresh samples, this simply truncates
-        the list to at most max_samples entries.
-        """
-        max_train_samples = self.args['max_train_samples']
-        if len(self.current_training_data) > max_train_samples:
-            self.current_training_data = self.current_training_data[
-                -max_train_samples:]
-
     def setup_dataloader(self):
         """
         Convert self.current_training_data (list of (state, policy, value))
         into a PyTorch DataLoader for training.
         """
-        self._take_freshest_training_data()
 
         states = []
         policies = []
@@ -85,13 +79,17 @@ class Trainer:
                                      shuffle=True)
 
     @torch.no_grad()
-    def self_play(self):
-        # same as rollout, but the policy is not random
+    def self_play(self, iter):
         trajectory = []
 
         state = self.env.get_initial_state()
         player, is_terminal = 1, False
-        mcts = MCTS(self.env, self.args, self.best_policy, False)
+        mcts = MCTS(self.env,
+                    self.args,
+                    self.best_policy,
+                    dirichlet_alpha=self.args['dirichlet_alpha'],
+                    dirichlet_epsilon=self.args['dirichlet_epsilon'])
+
         while True:
             action_probs = mcts.policy_improve_step(
                 state, player, temp=self.args['mcts_temperature'])
@@ -131,11 +129,13 @@ class Trainer:
         total_value_loss = 0.0
         total_batches = 0
 
-        dataloader_iter = infinite_dataloader(self.dataloader)
-
-        for _ in range(self.args['train_steps_per_iter']):
-            state, target_policy, target_value = next(dataloader_iter)
+        # dataloader_iter = infinite_dataloader(self.dataloader)
+        for (state, target_policy, target_value) in self.dataloader:
             # predict
+            state = state.to(self.device)
+            target_policy = target_policy.to(self.device)
+            target_value = target_value.to(self.device)
+
             policy_logits, value = self.policy(state)
             # compute policy loss
             log_probs = F.log_softmax(policy_logits, dim=-1)
@@ -150,8 +150,8 @@ class Trainer:
             loss.backward()
             self.optimizer.step()
 
-            total_policy_loss += policy_loss.item()
-            total_value_loss += value_loss.item()
+            total_policy_loss += policy_loss.cpu().item()
+            total_value_loss += value_loss.cpu().item()
             total_batches += 1
 
         avg_policy_loss = total_policy_loss / total_batches
@@ -166,16 +166,16 @@ class Trainer:
               f"Value Loss={self.metrics_history['value_loss'][-1]:.4f}")
 
     def train(self):
-        for _ in range(self.args['num_iterations']):
-            # self.clean_training_data()
+        for iter in range(self.args['num_iterations']):
 
             # self-play
             for _ in range(self.args['num_self_play']):
-                self.self_play()
+                self.self_play(iter)
 
             # train
             self.setup_dataloader()
-            self.train_iters()
+            for _ in range(self.args['num_epochs']):
+                self.train_iters()
 
             self.eval()
 
@@ -199,3 +199,52 @@ class Trainer:
         if current_win_rate - self.args['eval_win_margin'] > best_win_rate:
             print("Replacing best model with current model")
             self.best_policy = copy.deepcopy(self.policy)
+            torch.save(self.best_policy, 'othello_policy_RL.pt')
+
+            self.clean_training_data()
+            current_win_rate, best_win_rate = evaluate_models(self.env,
+                                                              self.args,
+                                                              self.policy,
+                                                              None,
+                                                              n_matches=30)
+            self.metrics_history['current_win_rate_rollout'].append(
+                current_win_rate)
+            self.metrics_history['best_win_rate_rollout'].append(best_win_rate)
+            print(
+                f"Eval against rollout: Win Rate Current {current_win_rate*100:.1f}% vs Win rate Best: {best_win_rate*100:.1f}%"
+            )
+
+
+if __name__ == '__main__':
+    mcts_args = {
+        'c_puct': 2.0,
+        'num_simulations': 100,
+        'dirichlet_alpha': 0.03,
+        'dirichlet_epsilon': 0.25
+    }
+
+    train_args = {
+        'lr': 1e-3,
+        'weight_decay': 3e-6,
+        'batch_size': 64,
+        'max_train_samples': 30000,
+        'mcts_temperature': 1.0,
+        'num_iterations': 200,
+        'num_self_play': 100,
+        'train_steps_per_iter': 20000,
+        'eval_win_margin': 0.05,
+        'num_eval_matches': 30,
+        'num_epochs': 15
+    }
+
+    train_args.update(mcts_args)
+
+    board_size = 8
+    # Extra action for "pass"
+    action_size = board_size * board_size + 1
+
+    env = OthelloGame(board_size)
+    policy = FastOthelloNet(board_size, action_size)
+    alphaZero = Trainer(env, train_args, policy)
+
+    alphaZero.train()
