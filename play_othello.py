@@ -5,6 +5,7 @@ import pygame  # Needed for the pygame.time.wait() call.
 from MCTS_model import MCTS
 from envs.othello import OthelloGame
 from ui.OthelloUI import OthelloUI
+from Models import FastOthelloNet
 
 
 def choose_move(state, current_player, env, mcts, ui):
@@ -14,10 +15,12 @@ def choose_move(state, current_player, env, mcts, ui):
       - For the human (player -1), use the UI to get input.
     """
     valid_moves = env.get_valid_moves(state, current_player)
-    if current_player == -1:
+    if current_player == 1:
         action_probs = mcts.policy_improve_step(state,
                                                 current_player,
                                                 temp=0.0)
+        # action_probs = mcts.inference(state, current_player)[0]
+        action_probs *= valid_moves  # keep only legal moves
         action = int(np.argmax(action_probs))
         if action == env.action_size - 1:
             print("Computer chooses: pass")
@@ -36,18 +39,18 @@ def choose_move(state, current_player, env, mcts, ui):
 def play_human_vs_mcts():
     # Parameters for MCTS.
     args = {'c_puct': 2.0, 'num_simulations': 100, 'mcts_temperature': 1.0}
-    board_size = 6  # 5x5 board.
+    # c_puct = 1.0 is good for supervised model, c_puct = 2.0 is good for RL model
+    board_size = 8
     env = OthelloGame(board_size)
     # For computer moves, we use an MCTS instance.
-    model_path = "othello_policy_6x6.pt"
+    model_path = "othello_policy_RL.pt"
     policy = torch.load(model_path)
     mcts = MCTS(env, args, policy)
 
     # Initialize the UI.
     ui = OthelloUI(board_size)
 
-    state = env.get_initial_state()  # shape: (board_size, board_size)
-    # Let computer be player 1 and human be player -1.
+    state = env.get_initial_state()
     current_player = 1
 
     running = True
