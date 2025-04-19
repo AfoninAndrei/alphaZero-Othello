@@ -1,8 +1,8 @@
-import copy
 import torch
 import numpy as np
 
 from MCTS_model import MCTS
+from envs.othello import OthelloGame
 
 
 @torch.no_grad()
@@ -65,8 +65,8 @@ def play_match(env, mcts_first, mcts_second):
             action_probs = mcts_second.policy_improve_step(init_state=state,
                                                            init_player=player,
                                                            temp=0.0)
-        # print(state, action_probs, player)
         action = np.argmax(action_probs)
+        print(f"player {player} chooses action: {action}")
         # update the root node of the trees
         mcts_first.make_move(action)
         mcts_second.make_move(action)
@@ -83,3 +83,20 @@ def play_match(env, mcts_first, mcts_second):
             else:
                 return "Draw"
         player = env.get_opponent(player)
+
+
+if __name__ == "__main__":
+    args = {'c_puct': 2.0, 'num_simulations': 100, 'mcts_temperature': 1.0}
+    board_size = 8
+    env = OthelloGame(board_size)
+    model_path = "othello_policy_RL.pt"
+    policy = torch.load(model_path)
+    mcts = MCTS(env, args, policy)
+
+    args_opponent = {
+        'c_puct': 2.0,
+        'num_simulations': 1000,
+        'mcts_temperature': 1.0
+    }
+    mcts_opponent = MCTS(env, args_opponent, None)
+    print(play_match(env, mcts, mcts_opponent))
