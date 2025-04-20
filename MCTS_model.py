@@ -139,7 +139,7 @@ class MCTS:
             assert np.all(self.root.state == init_state)
             assert self.root.player == init_player
 
-        for _ in range(self.args['num_simulations']):
+        for _ in range(self.args['num_simulations'] + 1):
             # simulate until the leaf node
             self._simulate(self.root)
 

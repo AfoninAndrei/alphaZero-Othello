@@ -10,23 +10,8 @@ from eval import evaluate_models
 from Models import FastOthelloNet
 from envs.othello import OthelloGame
 
-# TODO: Plot the value function prediction for each step for many games
-# for a trained model, we color it based on the real outcome
-# let's compare it to the MCTS prediction rollout and supervised model
-
-# TODO: during play against the agent let's print the value function
-# estimation of the win - would be fun to track it
-
-# TODO: parallise the expereince gain from the Othello game
-
-# TODO: One thing I found counter-intuitive about AlphaZero is that we don’t
-# directly train our policy network to make “good” moves.
-# Instead we train it to mimic the output of the Monte Carlo Tree Search
-
-# TODO: Use augmentations: 8 in total, using rotations and reflections
-# to speed up the convergence? AlphaZero does not use it though
-
 # TODO: parallelize MCTS search as well? What is the virtual loss?
+# parallise the expereince gain from the Othello game
 
 
 def infinite_dataloader(dataloader):

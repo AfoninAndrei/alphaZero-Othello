@@ -38,7 +38,7 @@ def choose_move(state, current_player, env, mcts, ui):
 
 def play_human_vs_mcts():
     # Parameters for MCTS.
-    args = {'c_puct': 1.0, 'num_simulations': 1000, 'mcts_temperature': 1.0}
+    args = {'c_puct': 2.0, 'num_simulations': 100, 'mcts_temperature': 1.0}
     # c_puct = 1.0 is good for supervised model, c_puct = 2.0 is good for RL model
     board_size = 8
     env = OthelloGame(board_size)
@@ -61,6 +61,9 @@ def play_human_vs_mcts():
 
         action = choose_move(state, current_player, env, mcts, ui)
         mcts.make_move(action)
+        win_prob = (mcts.root.value + 1) / 2
+        ui.set_win_prob(win_prob)
+
         state = env.get_next_state(state, action, current_player)
         value, done = env.get_value_and_terminated(state, action,
                                                    current_player)

@@ -5,19 +5,21 @@ import pygame
 import numpy as np
 
 # ----------------------------------------------------------------------------
-#  Othello UI with animations and a cleaner look (v1.2 – slower animations)
+#  Othello UI with animations, cleaner look, and board notations (v1.3)
 # ----------------------------------------------------------------------------
 
 
 class OthelloUI:
-    """A lightweight, animated UI for an N×N Othello board using Pygame.
+    """An animated UI for an N×N Othello board using Pygame.
 
-    Changelog v1.2
-    --------------
-    • **Slower animations** – piece drop & flips now run over **600 ms** instead
-      of 300 ms and a short 250 ms pause is inserted after the move completes so
-      players can register where the disc was placed.
-    • Version bump only; public API unchanged.
+    Changelog v1.3
+    ----------------
+    • **Board notations** – an extra header row and left‑hand column now show
+      column letters (a, b, …) and row numbers (1, 2, …) so moves can be
+      announced like **"4d"**.
+    • Internal coordinates now account for a *label margin* equal to one cell
+      size.
+    • All public methods keep the same signature as v1.2.
     """
 
     # ------------------------------------------------------------------
@@ -43,7 +45,8 @@ class OthelloUI:
                  anim_fps: int = 60):
         self.board_size = board_size
         self.cell_size = cell_size
-        self.window_size = board_size * cell_size
+        self.label_margin = cell_size  # one extra cell for labels (top & left)
+        self.window_size = board_size * cell_size + self.label_margin
         self.anim_fps = anim_fps
         self.anim_frames = int(self.ANIM_DURATION_S * anim_fps)
 
@@ -57,45 +60,92 @@ class OthelloUI:
         self._valid_dot = pygame.Surface((20, 20), flags=pygame.SRCALPHA)
         pygame.draw.circle(self._valid_dot, self.VALID_DOT_RGBA, (10, 10), 8)
 
+        # Font for labels
+        self.font = pygame.font.SysFont(None, int(cell_size * 0.4))
+        self.win_prob: float | None = None
+
     # ------------------------------------------------------------------
     #  Board drawing helpers
     # ------------------------------------------------------------------
 
+    def set_win_prob(self, prob: float | None):
+        """Store the latest win‑probability estimate (0–1)."""
+        self.win_prob = prob
+
     def _draw_grid(self) -> None:
-        """Draws the N×N grid on the current screen surface."""
+        """Draws the (N×N) grid and row/column labels."""
         self.screen.fill(self.BOARD_GREEN)
+
+        off = self.label_margin
+        board_px = self.board_size * self.cell_size
+
+        # Main grid lines
         for i in range(self.board_size + 1):
-            # Horizontal lines
-            y = i * self.cell_size
-            pygame.draw.line(self.screen, self.GRID_COLOR, (0, y),
-                             (self.window_size, y), 3)
-            # Vertical lines
-            x = i * self.cell_size
-            pygame.draw.line(self.screen, self.GRID_COLOR, (x, 0),
-                             (x, self.window_size), 3)
+            # Horizontal
+            y = off + i * self.cell_size
+            pygame.draw.line(self.screen, self.GRID_COLOR, (off, y),
+                             (off + board_px, y), 3)
+            # Vertical
+            x = off + i * self.cell_size
+            pygame.draw.line(self.screen, self.GRID_COLOR, (x, off),
+                             (x, off + board_px), 3)
+
+        # Column letters (top header row)
+        for c in range(self.board_size):
+            letter = chr(ord('a') + c)
+            text_surf = self.font.render(letter, True, self.WHITE)
+            text_rect = text_surf.get_rect()
+            text_rect.center = (off + c * self.cell_size + self.cell_size // 2,
+                                off // 2)
+            self.screen.blit(text_surf, text_rect)
+
+        # Row numbers (left‑hand column)
+        for r in range(self.board_size):
+            number = str(r + 1)
+            text_surf = self.font.render(number, True, self.WHITE)
+            text_rect = text_surf.get_rect()
+            text_rect.center = (off // 2,
+                                off + r * self.cell_size + self.cell_size // 2)
+            self.screen.blit(text_surf, text_rect)
 
     def _draw_pieces(self, board: np.ndarray) -> None:
         radius = self.cell_size // 2 - 6
+        off = self.label_margin
         for r in range(self.board_size):
             for c in range(self.board_size):
                 val = board[r, c]
                 if val == 0:
                     continue
                 colour = self.BLACK if val == 1 else self.WHITE
-                centre = (c * self.cell_size + self.cell_size // 2,
-                          r * self.cell_size + self.cell_size // 2)
+                centre = (off + c * self.cell_size + self.cell_size // 2,
+                          off + r * self.cell_size + self.cell_size // 2)
                 pygame.draw.circle(self.screen, colour, centre, radius)
 
     def _draw_valid_moves(self, valid_moves: Iterable[int] | None) -> None:
         if valid_moves is None:
             return
+        off = self.label_margin
         for idx, mv in enumerate(valid_moves):
             if not mv or idx >= self.board_size * self.board_size:
                 continue
             r, c = divmod(idx, self.board_size)
-            top_left = (c * self.cell_size + (self.cell_size - 20) // 2,
-                        r * self.cell_size + (self.cell_size - 20) // 2)
+            top_left = (off + c * self.cell_size + (self.cell_size - 20) // 2,
+                        off + r * self.cell_size + (self.cell_size - 20) // 2)
             self.screen.blit(self._valid_dot, top_left)
+
+    def _draw_value_estimate(self) -> None:
+        if self.win_prob is None:
+            return
+        pct = f"{self.win_prob*100:5.1f}%"
+        text = self.font.render(f"win: {pct}", True, self.WHITE)
+        rect = text.get_rect()
+
+        # -------- updated placement (8 px from top‑right corner) --------
+        margin = 3
+        rect.topleft = (margin, margin)
+        # ----------------------------------------------------------------
+
+        self.screen.blit(text, rect)
 
     # ------------------------------------------------------------------
     #  Public drawing API
@@ -108,6 +158,7 @@ class OthelloUI:
         self._draw_grid()
         self._draw_pieces(board)
         self._draw_valid_moves(valid_moves)
+        self._draw_value_estimate()
 
     # ------------------------------------------------------------------
     #  Animation helpers
@@ -116,8 +167,9 @@ class OthelloUI:
     def _animate_piece_drop(self, pos: Tuple[int, int], colour: Tuple[int, int,
                                                                       int]):
         r, c = pos
-        centre = (c * self.cell_size + self.cell_size // 2,
-                  r * self.cell_size + self.cell_size // 2)
+        off = self.label_margin
+        centre = (off + c * self.cell_size + self.cell_size // 2,
+                  off + r * self.cell_size + self.cell_size // 2)
         max_radius = self.cell_size // 2 - 6
         for f in range(self.anim_frames):
             self._draw_grid()
@@ -132,12 +184,13 @@ class OthelloUI:
                        new_colour: Tuple[int, int, int]):
         max_radius = self.cell_size // 2 - 6
         half = self.anim_frames // 2
+        off = self.label_margin
         for f in range(self.anim_frames):
             self._draw_grid()
             self.screen.blit(self._bg_buffer, (0, 0))
             for r, c in flips:
-                centre = (c * self.cell_size + self.cell_size // 2,
-                          r * self.cell_size + self.cell_size // 2)
+                centre = (off + c * self.cell_size + self.cell_size // 2,
+                          off + r * self.cell_size + self.cell_size // 2)
                 if f < half:
                     # shrink old colour
                     radius = int(max_radius * (1 - f / half))
@@ -194,6 +247,19 @@ class OthelloUI:
     #  User input
     # ------------------------------------------------------------------
 
+    def _pixel_to_board(self, x: int, y: int) -> Tuple[int, int] | None:
+        """Convert pixel coordinates to (row, col) or *None* if outside board."""
+        off = self.label_margin
+        if x < off or y < off:
+            return None
+        x -= off
+        y -= off
+        c = x // self.cell_size
+        r = y // self.cell_size
+        if c >= self.board_size or r >= self.board_size:
+            return None
+        return r, c
+
     def get_human_move(self, valid_moves: Iterable[int]):
         while True:
             for event in pygame.event.get():
@@ -206,7 +272,10 @@ class OthelloUI:
                         return pass_idx
                 elif event.type == pygame.MOUSEBUTTONDOWN:
                     x, y = pygame.mouse.get_pos()
-                    c, r = x // self.cell_size, y // self.cell_size
+                    rc = self._pixel_to_board(x, y)
+                    if rc is None:
+                        continue
+                    r, c = rc
                     idx = r * self.board_size + c
                     if valid_moves[idx]:
                         return idx
