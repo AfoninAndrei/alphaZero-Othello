@@ -38,12 +38,13 @@ def choose_move(state, current_player, env, mcts, ui):
 
 def play_human_vs_mcts():
     # Parameters for MCTS.
-    args = {'c_puct': 2.0, 'num_simulations': 100, 'mcts_temperature': 1.0}
+    args = {'c_puct': 1.0, 'num_simulations': 300, 'mcts_temperature': 1.0}
     # c_puct = 1.0 is good for supervised model, c_puct = 2.0 is good for RL model
     board_size = 8
     env = OthelloGame(board_size)
     # For computer moves, we use an MCTS instance.
     model_path = "othello_policy_RL.pt"
+    # model_path = "othello_policy_supervised.pt"
     policy = torch.load(model_path)
     mcts = MCTS(env, args, policy)
 

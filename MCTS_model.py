@@ -1,11 +1,34 @@
 import math
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 from typing import Dict, Any, List
 
 EPS = 1e-8
+VIRTUAL_LOSS = 3.0
 
 
 class Node:
+
+    __slots__ = (
+        "env",
+        "args",
+        "state",
+        "player",
+        "action",
+        "prior",
+        "value_sum",
+        "visit_count",
+        "virtual_visits",
+        "virtual_value",
+        "parent",
+        "children",
+        "valid_mask",
+        "valid_actions",
+        "terminal_value",
+        "is_terminal",
+        "lock",
+    )
 
     def __init__(self,
                  env: Any,
@@ -26,6 +49,10 @@ class Node:
         self.value_sum = 0.0
         self.visit_count = 0
 
+        # Virtual loss bookkeeping for multithreading
+        self.virtual_visits = 0
+        self.virtual_value = 0.0
+
         self.parent = parent
         # Children: action -> Node
         self.children: Dict[Any, Node] = {}
@@ -43,30 +70,43 @@ class Node:
             self.terminal_value = 0
             self.is_terminal = False
 
+        self.lock = threading.Lock()
+
     @property
     def value(self) -> float:
-        """Mean value so far."""
-        if self.visit_count == 0:
-            return 0.0
-        return self.value_sum / self.visit_count
+        total_v = self.value_sum + self.virtual_value
+        total_n = self.visit_count + self.virtual_visits
+        return 0.0 if total_n == 0 else total_v / total_n
+
+    def add_virtual_loss(self):
+        with self.lock:
+            self.virtual_visits += 1
+            self.virtual_value += VIRTUAL_LOSS
+
+    def revert_virtual_loss(self):
+        with self.lock:
+            self.virtual_visits -= 1
+            self.virtual_value -= VIRTUAL_LOSS
 
     def is_leaf(self) -> bool:
         return len(self.children) == 0
 
     def _get_ucb_score(self, action: int, prior: float) -> float:
         if action not in self.children:
-            score = self.args['c_puct'] * prior * math.sqrt(self.visit_count +
-                                                            EPS)
-            return score
+            return self.args["c_puct"] * prior * math.sqrt(
+                self.visit_count + self.virtual_visits + EPS)
 
         child = self.children[action]
-        score = - child.value + self.args['c_puct'] * child.prior * \
-                        math.sqrt(self.visit_count + EPS) / (1 + child.visit_count)
-        return score
+        q = -child.value  # from parent player's perspective
+        u = (self.args["c_puct"] * child.prior *
+             math.sqrt(self.visit_count + self.virtual_visits + EPS) /
+             (1 + child.visit_count + child.virtual_visits))
+        return q + u
 
     def update(self, value: float):
-        self.visit_count += 1
-        self.value_sum += value
+        with self.lock:
+            self.visit_count += 1
+            self.value_sum += value
 
     def expand(self, action: int, child_state: np.ndarray, child_prior: float):
         next_player = self.env.get_opponent(self.player)
@@ -77,7 +117,8 @@ class Node:
                           action=action,
                           prior=child_prior,
                           parent=self)
-        self.children[action] = child_node
+        with self.lock:
+            self.children[action] = child_node
 
     def backpropagate(self, value: float):
         current_node = self
@@ -112,6 +153,7 @@ class MCTS:
 
         # Keep a persistent tree (root) between moves.
         self.root = None
+        self.num_threads: int = max(1, self.args.get("num_threads", 10))
 
     def make_move(self, action):
         # this assumes that env is deterministic
@@ -131,7 +173,7 @@ class MCTS:
         if self.root is None:
             self.root = Node(env=self.env,
                              args=self.args,
-                             state=init_state.copy(),
+                             state=init_state,
                              player=init_player,
                              action=None)
         else:
@@ -181,7 +223,7 @@ class MCTS:
         """
         # Rollout is MC estimation of the the value function
         # Using policy for value setimation is like TD-learning
-        current_state = state.copy()
+        current_state = state
         current_player = player
         while True:
             valid_moves = self.env.get_valid_moves(current_state,
@@ -232,7 +274,7 @@ class MCTS:
         # Expand each valid move
         for action in leaf.valid_actions:
             # Construct next state
-            next_state = leaf.state.copy()
+            next_state = leaf.state
             # Apply the move for 'leaf.player'
             next_state = self.env.get_next_state(next_state, action,
                                                  leaf.player)
@@ -247,33 +289,33 @@ class MCTS:
         """
         PUCT selection among the children of 'node'.
         """
-        best_score = -float('inf')
-        best_action = None
-        for action in node.valid_actions:
-            if action not in node.children:
-                continue
-
-            prior = node.children[action].prior
-            score = node._get_ucb_score(action, prior)
-            if score > best_score:
-                best_score = score
-                best_action = action
-
-        return node.children[best_action]
+        best_a = max(
+            (a for a in node.valid_actions if a in node.children),
+            key=lambda a: node._get_ucb_score(a, node.children[a].prior),
+        )
+        return node.children[best_a]
 
     def _simulate(self, root_node: Node):
         node = root_node
+        path: List[Node] = []
 
         # 1) Traverse down
         while True:
+            node.add_virtual_loss()
+            path.append(node)
+
             if node.is_terminal:
                 # Terminal leaf => backprop the known terminal value
                 node.backpropagate(node.terminal_value)
-                return
+                break
+
             if node.is_leaf():
                 # Leaf => Expand it, then backprop
                 self._expand_and_evaluate(node)
-                return
+                break
 
             # Otherwise, pick a child to go deeper
             node = self._select_child(node)
+
+        for n in path:
+            n.revert_virtual_loss()

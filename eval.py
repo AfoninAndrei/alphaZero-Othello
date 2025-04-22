@@ -8,6 +8,8 @@ import numpy as np
 from MCTS_model import MCTS
 from envs.othello import OthelloGame
 
+import time
+
 
 @torch.no_grad()
 def evaluate_models(env, args, policy, best_policy, n_matches=20):
@@ -223,7 +225,7 @@ def plot_value_trajectories(curves_A, results_A, curves_B, results_B):
 
 
 if __name__ == "__main__":
-    args = {'c_puct': 2.0, 'num_simulations': 75, 'mcts_temperature': 1.0}
+    args = {'c_puct': 2.0, 'num_simulations': 200, 'mcts_temperature': 1.0}
     board_size = 8
     env = OthelloGame(board_size)
     model_path = "othello_policy_RL.pt"
@@ -234,12 +236,16 @@ if __name__ == "__main__":
     mcts = MCTS(env, args, policy)
 
     args_opponent = {
-        'c_puct': 2.0,
-        'num_simulations': 25,
+        'c_puct': 1.0,
+        'num_simulations': 100,
         'mcts_temperature': 1.0
     }
+
     mcts_opponent = MCTS(env, args_opponent, policy_supervised)
+
+    start_time = time.time()
     print(play_match(env, mcts, mcts_opponent))
+    print('Time taken', time.time() - start_time)
 
     # TODO: Compare the curves for the model vs model with MCTS - this should show
     # how far it is from being optimal?

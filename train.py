@@ -1,17 +1,24 @@
+import time
+import os
 import copy
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
+from multiprocessing import get_context
 
-from MCTS_model import MCTS
 from eval import evaluate_models
+from self_play_worker import one_self_play
 from Models import FastOthelloNet
 from envs.othello import OthelloGame
 
 # TODO: parallelize MCTS search as well? What is the virtual loss?
-# parallise the expereince gain from the Othello game
+
+# TODO: cache position evaluations
+
+# TODO: try as a learning target to use q + z, instead of z
+# this should help to reduce the noise
 
 
 def infinite_dataloader(dataloader):
@@ -81,50 +88,22 @@ class Trainer:
                                      batch_size=self.args['batch_size'],
                                      shuffle=True)
 
-    @torch.no_grad()
-    def self_play(self, iter):
-        trajectory = []
+    def collect_self_play_games(self):
+        """Run `num_self_play` games in parallel and extend
+        `self.current_training_data`."""
+        ctx = get_context("spawn")
+        with ctx.Pool(self.args["num_workers"]) as pool:
+            # Prepare a tuple of arg‑tuples so we can stream them
+            work_items = [(wid, self.env.n, self.args,
+                           self.best_policy.state_dict(),
+                           np.random.randint(1_000_000))
+                          for wid in range(self.args["num_self_play"])]
 
-        state = self.env.get_initial_state()
-        player, is_terminal = 1, False
-        mcts = MCTS(self.env,
-                    self.args,
-                    self.best_policy,
-                    dirichlet_alpha=self.args['dirichlet_alpha'],
-                    dirichlet_epsilon=self.args['dirichlet_epsilon'])
-
-        while True:
-            action_probs = mcts.policy_improve_step(
-                state, player, temp=self.args['mcts_temperature'])
-            trajectory.append(
-                (state.copy() * player, action_probs.copy(), player))
-
-            action = np.random.choice(self.env.action_size, p=action_probs)
-            mcts.make_move(action)
-            state = self.env.get_next_state(state, action, player)
-            reward, is_terminal = self.env.get_value_and_terminated(
-                state, action, player)
-
-            if is_terminal:
-                if reward > 0:
-                    winning_player = player
-                elif reward < 0:
-                    winning_player = self.env.get_opponent(player)
-                else:
-                    winning_player = 0
-
-                # update the rewards based on outcome
-                for i, (st, pol, ply) in enumerate(trajectory):
-                    outcome = 1 if ply == winning_player else (
-                        -1 if winning_player != 0 else 0)
-                    trajectory[i] = (st, pol, outcome)
-
-                # Accumulate the entire game data
-                self.self_play_history['winner'].append(player)
-                self.current_training_data += trajectory
-                return
-
-            player = self.env.get_opponent(player)
+            # chunksize=1 → each worker returns as soon as it finishes
+            for traj in pool.imap_unordered(one_self_play,
+                                            work_items,
+                                            chunksize=1):
+                self.current_training_data.extend(traj)
 
     def train_iters(self):
         self.policy.train()
@@ -172,15 +151,18 @@ class Trainer:
         for iter in range(self.args['num_iterations']):
 
             # self-play
-            for _ in range(self.args['num_self_play']):
-                self.self_play(iter)
+            start_time = time.time()
+            self.collect_self_play_games()
 
+            print("Time taken", time.time() - start_time)
+
+            print(f"Collected {len(self.current_training_data)} positions")
             # train
             self.setup_dataloader()
             for _ in range(self.args['num_epochs']):
                 self.train_iters()
 
-            self.eval()
+            # self.eval()
 
     def eval(self):
         self.policy.eval()
@@ -233,11 +215,12 @@ if __name__ == '__main__':
         'max_train_samples': 30000,
         'mcts_temperature': 1.0,
         'num_iterations': 200,
-        'num_self_play': 100,
+        'num_self_play': 4,
         'train_steps_per_iter': 20000,
         'eval_win_margin': 0.05,
         'num_eval_matches': 30,
-        'num_epochs': 15
+        'num_epochs': 15,
+        "num_workers": os.cpu_count() or 4
     }
 
     train_args.update(mcts_args)
