@@ -48,7 +48,7 @@ def one_self_play(args_tuple):
         reward, is_terminal = env.get_value_and_terminated(
             state, action, player)
         if is_terminal:
-            winning_player = 1 if reward > 0 else (
+            winning_player = player if reward > 0 else (
                 env.get_opponent(player) if reward < 0 else 0)
 
             # back‑propagate the game outcome into the stored positions
