@@ -109,6 +109,120 @@ class Board:
         return []
 
 
+_MASKS = np.array(
+    [
+        np.uint64(0x7F7F7F7F7F7F7F7F),  # right
+        np.uint64(0x007F7F7F7F7F7F7F),  # down-right
+        np.uint64(0xFFFFFFFFFFFFFFFF),  # down
+        np.uint64(0x00FEFEFEFEFEFEFE),  # down-left
+        np.uint64(0xFEFEFEFEFEFEFEFE),  # left
+        np.uint64(0xFEFEFEFEFEFEFE00),  # up-left
+        np.uint64(0xFFFFFFFFFFFFFFFF),  # up
+        np.uint64(0x7F7F7F7F7F7F7F00),  # up-right
+    ],
+    dtype=np.uint64)
+_LSHIFTS = [0, 0, 0, 0, 1, 9, 8, 7]
+_RSHIFTS = [1, 9, 8, 7, 0, 0, 0, 0]
+
+
+class _BitBoard:
+    """Internal 8×8 Othello bitboard.
+
+    `black` always denotes the side to move; `white` is the opponent.
+    """
+    __slots__ = ("black", "white", "perspective")
+
+    def __init__(self):
+        # Starting position (black to move)
+        self.black = np.uint64(0x0000000810000000)  # d5, e4
+        self.white = np.uint64(0x0000001008000000)  # e5, d4
+        self.perspective = 1
+
+    @staticmethod
+    def _lsb(mask: np.uint64) -> int:
+        m = int(mask)
+        return (m & -m).bit_length() - 1
+
+    @staticmethod
+    def _shift(disks: np.uint64, dir: int) -> np.uint64:
+        """
+        Bit-shift in direction dir (0–7), masking wrap-around exactly like C.
+        """
+        if dir < 4:
+            return (disks >> _RSHIFTS[dir]) & _MASKS[dir]
+        else:
+            return (disks << _LSHIFTS[dir]) & _MASKS[dir]
+
+    def _legal_moves(self, own: np.uint64, opp: np.uint64) -> np.uint64:
+        """Return bitmask of all legal moves for `own` against `opp`."""
+        empty = ~(own | opp)
+        moves = np.uint64(0)
+        for d in range(8):
+            x = self._shift(own, d) & opp
+            for _ in range(5):
+                x |= self._shift(x, d) & opp
+            moves |= self._shift(x, d) & empty
+        return moves
+
+    def valid_mask(self) -> np.uint64:
+        return self._legal_moves(self.black, self.white)
+
+    def make_move(self, action: int):
+        """
+        Play `action` (0–63) for the side-to-move (in `black`);
+        use 64 to pass. Maintains `black` as the next side to move.
+        """
+        # pass move
+        if action == 64:
+            self.black, self.white = self.white, self.black
+            self.perspective *= -1
+            return
+
+        new = np.uint64(1) << np.uint64(action)
+        # include the new disk for bounding detection
+        my = self.black | new
+        opp = self.white
+        captured = np.uint64(0)
+
+        for d in range(8):
+            x = self._shift(new, d) & opp
+            for _ in range(5):
+                x |= self._shift(x, d) & opp
+            if self._shift(x, d) & my:
+                captured |= x
+
+        # apply move and flips
+        self.black = my ^ captured
+        self.white = opp ^ captured
+        # switch side-to-move
+        self.black, self.white = self.white, self.black
+        self.perspective *= -1
+
+    def to_numpy(self) -> np.ndarray:
+        black, white = ((self.black, self.white) if self.perspective == 1 else
+                        (self.white, self.black))
+        board = np.zeros((8, 8), dtype=np.int8)
+        for colour, mask in ((1, black), (-1, white)):
+            m = mask
+            while m:
+                sq = self._lsb(m)
+                board[sq // 8, sq % 8] = colour
+                m &= m - 1
+        return board
+
+    def score(self) -> int:
+        """
+        Final score matching Board calculation:
+        board.count_diff(1) - board.count_diff(-1) = 2*(black - white)
+        """
+        diff = int(int(self.black).bit_count() - int(self.white).bit_count())
+        return diff
+
+
+# helper popcount (used by any other code)
+popcount = np.vectorize(lambda x: int(int(x).bit_count()), otypes=[int])
+
+
 class OthelloGame(Game):
     square_content = {-1: "X", +0: "-", +1: "O"}
 
@@ -212,4 +326,192 @@ class OthelloGame(Game):
                                                                             x]]
                                            for x in range(n)) + " |"
             print(row_str)
+        print("-" * (len(header) + 2))
+
+
+class OthelloGameNew(Game):
+    """
+    Same public interface as the original Array‑based version but backed
+    by the lock‑free 64‑bit bitboard core.
+    """
+    square_content = {-1: "X", 0: "-", 1: "O"}
+
+    @staticmethod
+    def get_square_piece(piece: int) -> str:
+        return OthelloGameNew.square_content[piece]
+
+    def __init__(self, n: int):
+        # The bitboard works only for 8×8; keep the assert so errors are loud
+        assert n == 8, "Bitboard engine supports only standard 8×8 Othello"
+        self.n = n
+        self._state_size = n * n
+        self._action_size = self._state_size + 1  # +1 for the 'pass' move
+
+    # -------- public properties (unchanged) ---------------------------
+    @property
+    def action_size(self):  # noqa: D401
+        return self._action_size
+
+    @property
+    def state_size(self):  # noqa: D401
+        return self._state_size
+
+    def _idx_to_bit(idx: int) -> int:
+        """
+        Row‑major array index 0..63  →  bit index 0..63 used by _BitBoard.
+
+        Array coordinates:
+            row 0 = top, col 0 = left
+        Bitboard coordinates (as used by the C core):
+            bit 0 = A1 (bottom‑left), bit 63 = H8 (top‑right).
+
+        We therefore need to flip *both* the vertical **and** horizontal
+        axes when mapping.
+        """
+        row, col = divmod(idx, 8)
+        return (7 - row) * 8 + (7 - col)  # ← flip row and col
+
+    @staticmethod
+    def _bit_to_idx(bit: int) -> int:
+        """Inverse of `_idx_to_bit`."""
+        row, col = divmod(bit, 8)
+        return (7 - row) * 8 + (7 - col)
+
+    @staticmethod
+    def _np_to_bitboards(state: np.ndarray, player: int):
+        flat = state.ravel()
+        black = np.uint64(0)
+        white = np.uint64(0)
+        for idx, val in enumerate(flat):
+            if val == player:
+                # map row*8+col → bitboard index
+                bb_idx = OthelloGameNew._idx_to_bit(idx)
+                black |= np.uint64(1) << np.uint64(bb_idx)
+            elif val == -player:
+                bb_idx = OthelloGameNew._idx_to_bit(idx)
+                white |= np.uint64(1) << np.uint64(bb_idx)
+        return black, white
+
+    @staticmethod
+    def _bitboards_to_np(black: np.uint64, white: np.uint64) -> np.ndarray:
+        board = np.zeros(64, np.int8)
+        b = int(black)
+        while b:
+            sq = (b & -b).bit_length() - 1
+            idx = OthelloGameNew._bit_to_idx(sq)
+            board[idx] = 1
+            b &= b - 1
+        w = int(white)
+        while w:
+            sq = (w & -w).bit_length() - 1
+            idx = OthelloGameNew._bit_to_idx(sq)
+            board[idx] = -1
+            w &= w - 1
+        return board.reshape(8, 8)
+
+    def get_initial_state(self):
+        bb = _BitBoard()
+        return self._bitboards_to_np(bb.black, bb.white)
+
+    def get_valid_moves(self, state, player: int):
+        black, white = self._np_to_bitboards(state, player)
+        bb = _BitBoard()
+        bb.black, bb.white = black, white
+
+        mask = bb.valid_mask()
+        valid = np.zeros(self._action_size, np.uint8)
+        if mask == 0:
+            valid[-1] = 1  # only pass
+            return valid
+
+        m = int(mask)
+        while m:
+            lsb = (m & -m).bit_length() - 1
+            act_idx = OthelloGameNew._bit_to_idx(lsb)
+            valid[act_idx] = 1
+            m &= m - 1
+        return valid
+
+    def get_next_state(self, state, action: int, player: int):
+        # pass
+        if action == self._state_size:
+            return state.copy()
+
+        # illegal‐move guard
+        valid = self.get_valid_moves(state, player)
+        if valid[action] == 0:
+            raise ValueError(f"Illegal move: {action}")
+
+        # actual move
+        black, white = self._np_to_bitboards(state, player)
+        bb = _BitBoard()
+        bb.black, bb.white = black, white
+        # convert action (row*8+col) → bitboard index, then play
+        bb.make_move(OthelloGameNew._idx_to_bit(action))
+
+        if player == -1:
+            return self._bitboards_to_np(bb.black, bb.white)
+        else:
+            return self._bitboards_to_np(bb.white, bb.black)
+
+    def get_value_and_terminated(self, state, action, player):
+        # Don’t check action legality here—just see if either side has moves
+        # (we ignore `action` entirely, matching the old API).
+
+        # If player still has any *non‑pass* moves, game continues
+        if np.any(self.get_valid_moves(state, player)[:-1]):
+            return 0, False
+
+        # If opponent still has moves, game continues
+        if np.any(self.get_valid_moves(state, -player)[:-1]):
+            return 0, False
+
+        # Otherwise game over — determine winner by piece count
+        diff = np.sum(state == player) - np.sum(state == -player)
+        if diff > 0:
+            return 1, True
+        elif diff < 0:
+            return -1, True
+        else:
+            return 0, True
+
+    # --------------- untouched helpers / logging -----------------------
+    def get_canonical_form(self, state, player):
+        return player * state
+
+    def get_symmetries(self, state, pi):
+        assert len(pi) == self._action_size
+        pi_board = np.reshape(pi[:-1], (self.n, self.n))
+        sym = []
+        for k in range(4):
+            rot_s = np.rot90(state, k)
+            rot_p = np.rot90(pi_board, k)
+            sym.append((rot_s, list(rot_p.ravel()) + [pi[-1]]))
+            flip_s = np.fliplr(rot_s)
+            flip_p = np.fliplr(rot_p)
+            sym.append((flip_s, list(flip_p.ravel()) + [pi[-1]]))
+        return sym
+
+    def string_representation(self, state):
+        return state.tobytes()
+
+    def string_representation_readable(self, state):
+        return "".join(self.square_content[sq] for row in state for sq in row)
+
+    def get_score(self, state, player):
+        return int(np.sum(state == player) - np.sum(state == -player))
+
+    def get_opponent(self, player):
+        return -player
+
+    @staticmethod
+    def display(state):
+        n = state.shape[0]
+        header = "   " + " ".join(str(i) for i in range(n))
+        print(header)
+        print("-" * (len(header) + 2))
+        for y in range(n):
+            row = " ".join(OthelloGame.square_content[state[y, x]]
+                           for x in range(n))
+            print(f"{y} | {row} |")
         print("-" * (len(header) + 2))
