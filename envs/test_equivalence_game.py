@@ -208,16 +208,6 @@ def test_get_square_piece():
     assert FastGameBase.get_square_piece(0) == '-'
 
 
-def test_canonical_form_flips_correctly():
-    slow = OthelloGame(8)
-    new = FastGameBase(8)
-    s = slow.get_initial_state()
-    can_slow = slow.get_canonical_form(s, -1)
-    can_fast = new.get_canonical_form(s, -1)
-    np.testing.assert_array_equal(can_slow, -s)
-    np.testing.assert_array_equal(can_fast, -s)
-
-
 def test_symmetry_content_matches():
     slow = OthelloGame(8)
     new = FastGameBase(8)
@@ -230,21 +220,6 @@ def test_symmetry_content_matches():
         assert_state_equal(bs, bn)
         assert_policy_equal(np.array(ps, dtype=pi.dtype),
                             np.array(pn, dtype=pi.dtype))
-
-
-def test_string_display_readable_and_bytes_consistency():
-    slow = OthelloGame(8)
-    new = FastGameBase(8)
-    s = slow.get_initial_state()
-    # string repr
-    b_slow = slow.string_representation(s)
-    b_new = new.string_representation(s)
-    assert isinstance(b_slow, bytes)
-    assert b_slow == b_new
-    # human readable
-    h_slow = slow.string_representation_readable(s)
-    h_new = new.string_representation_readable(s)
-    assert h_slow == h_new
 
 
 def test_display_prints_expected_format(capsys):

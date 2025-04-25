@@ -8,17 +8,30 @@ from torch.utils.data import DataLoader, TensorDataset
 import numpy as np
 from multiprocessing import get_context
 
-from eval import evaluate_models
+from eval import evaluate_models_parallel, _worker_init
 from self_play_worker import one_self_play
 from Models import FastOthelloNet
-from envs.othello import OthelloGame
 
-# TODO: parallelize MCTS search as well? What is the virtual loss?
+# TODO: parallelize MCTS search as well?
 
-# TODO: cache position evaluations
+# TODO: speed up the othello env even more
+
+# TODO: probably it makes sense to try parallel search in the tree
+# then accumulate batch of things to evaluate -> run inference on mps
 
 # TODO: try as a learning target to use q + z, instead of z
-# this should help to reduce the noise
+# this should help to reduce the noise, also if we have duplicating data after data collection
+# maybe it makes sense to filter it? Also maybe it makes sense to construct td-lambda target?
+
+# TODO: add to the blog explanation on why we choose 100 simulations in the tree
+# it feels like starting from this number we have good estimation of the win
+# variance is lower
+
+# Speed up story: Probably makes sense to remeasure everything
+# 1. multiprocessing for self-play ~4x self-play speed up
+# 2. multiprocessing for the evaluation ~4x eval speed up
+# 3. Training on the mps ~2x speed up
+# 4. Faster othello env ~25% speed up
 
 
 def infinite_dataloader(dataloader):
@@ -29,15 +42,15 @@ def infinite_dataloader(dataloader):
 
 class Trainer:
 
-    def __init__(self, env, args, policy):
-        self.env = env
+    def __init__(self, board_size, args, policy):
+        self.board_size = board_size
         self.args = args
         self.policy = policy
         self.num_simulations = self.args['num_simulations']
 
-        self.device = torch.device("cpu")
-        self.policy.to(self.device)
-        self.best_policy = self.policy
+        self.train_device = torch.device("mps")
+        # important to copy, otherwise we update both models during training
+        self.best_policy = copy.deepcopy(self.policy).eval()
 
         self.value_loss = nn.MSELoss()
         self.optimizer = torch.optim.Adam(
@@ -80,7 +93,7 @@ class Trainer:
         states = np.array(states, dtype=np.float32)
         policies = np.array(policies, dtype=np.float32)
         values = np.array(values, dtype=np.float32).reshape(-1, 1)
-
+        #TODO: States are saved as 2-D float32 boards; most AlphaZero style nets expect channels × H × W.
         dataset = TensorDataset(torch.from_numpy(states),
                                 torch.from_numpy(policies),
                                 torch.from_numpy(values))
@@ -92,12 +105,14 @@ class Trainer:
         """Run `num_self_play` games in parallel and extend
         `self.current_training_data`."""
         ctx = get_context("spawn")
-        with ctx.Pool(self.args["num_workers"]) as pool:
+        base_seed = np.random.randint(1_000_000)
+        with ctx.Pool(self.args["num_workers"],
+                      initializer=_worker_init,
+                      initargs=(base_seed, )) as pool:
             # Prepare a tuple of arg‑tuples so we can stream them
-            work_items = [(wid, self.env.n, self.args,
-                           self.best_policy.state_dict(),
-                           np.random.randint(1_000_000))
-                          for wid in range(self.args["num_self_play"])]
+            work_items = [(self.board_size, self.args,
+                           self.best_policy.state_dict())
+                          for _ in range(self.args["num_self_play"])]
 
             # chunksize=1 → each worker returns as soon as it finishes
             for traj in pool.imap_unordered(one_self_play,
@@ -106,6 +121,7 @@ class Trainer:
                 self.current_training_data.extend(traj)
 
     def train_iters(self):
+        self.policy.to(self.train_device)
         self.policy.train()
         total_policy_loss = 0.0
         total_value_loss = 0.0
@@ -114,9 +130,9 @@ class Trainer:
         # dataloader_iter = infinite_dataloader(self.dataloader)
         for (state, target_policy, target_value) in self.dataloader:
             # predict
-            state = state.to(self.device)
-            target_policy = target_policy.to(self.device)
-            target_value = target_value.to(self.device)
+            state = state.to(self.train_device)
+            target_policy = target_policy.to(self.train_device)
+            target_value = target_value.to(self.train_device)
 
             policy_logits, value = self.policy(state)
             # compute policy loss
@@ -148,29 +164,35 @@ class Trainer:
               f"Value Loss={self.metrics_history['value_loss'][-1]:.4f}")
 
     def train(self):
-        for iter in range(self.args['num_iterations']):
+        for _ in range(self.args['num_iterations']):
 
             # self-play
             start_time = time.time()
             self.collect_self_play_games()
 
-            print("Time taken", time.time() - start_time)
+            print("Collection Time taken", time.time() - start_time)
 
             print(f"Collected {len(self.current_training_data)} positions")
             # train
             self.setup_dataloader()
+
+            start_time = time.time()
             for _ in range(self.args['num_epochs']):
                 self.train_iters()
+            print("Train Time taken", time.time() - start_time)
 
-            # self.eval()
+            start_time = time.time()
+            self.eval()
+            print("Eval Time taken", time.time() - start_time)
 
     def eval(self):
+        self.policy.to("cpu")
         self.policy.eval()
-        current_win_rate, best_win_rate = evaluate_models(
-            self.env,
+        current_win_rate, best_win_rate = evaluate_models_parallel(
+            self.board_size,
             self.args,
-            self.policy,
-            self.best_policy,
+            self.policy.state_dict(),
+            self.best_policy.state_dict(),
             n_matches=self.args['num_eval_matches'])
 
         print(
@@ -187,11 +209,12 @@ class Trainer:
             torch.save(self.best_policy, 'othello_policy_RL.pt')
 
             self.clean_training_data()
-            current_win_rate, best_win_rate = evaluate_models(self.env,
-                                                              self.args,
-                                                              self.policy,
-                                                              None,
-                                                              n_matches=30)
+            current_win_rate, best_win_rate = evaluate_models_parallel(
+                self.board_size,
+                self.args,
+                self.policy.state_dict(),
+                None,
+                n_matches=30)
             self.metrics_history['current_win_rate_rollout'].append(
                 current_win_rate)
             self.metrics_history['best_win_rate_rollout'].append(best_win_rate)
@@ -215,7 +238,7 @@ if __name__ == '__main__':
         'max_train_samples': 30000,
         'mcts_temperature': 1.0,
         'num_iterations': 200,
-        'num_self_play': 4,
+        'num_self_play': 100,
         'train_steps_per_iter': 20000,
         'eval_win_margin': 0.05,
         'num_eval_matches': 30,
@@ -229,8 +252,7 @@ if __name__ == '__main__':
     # Extra action for "pass"
     action_size = board_size * board_size + 1
 
-    env = OthelloGame(board_size)
     policy = FastOthelloNet(board_size, action_size)
-    alphaZero = Trainer(env, train_args, policy)
+    alphaZero = Trainer(board_size, train_args, policy)
 
     alphaZero.train()

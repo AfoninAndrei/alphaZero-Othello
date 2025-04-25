@@ -85,13 +85,6 @@ class TestOthelloGame(unittest.TestCase):
         self.assertFalse(terminated)
         self.assertEqual(value, 0)
 
-    def test_string_representation(self):
-        s = self.game.string_representation(self.initial_state)
-        self.assertIsInstance(s, bytes)
-        s_readable = self.game.string_representation_readable(
-            self.initial_state)
-        self.assertIsInstance(s_readable, str)
-
     def test_symmetries(self):
         # Create a dummy policy vector (pi) with zeros.
         pi = [0] * (self.n * self.n) + [0]

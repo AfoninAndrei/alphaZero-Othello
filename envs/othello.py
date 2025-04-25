@@ -121,6 +121,7 @@ _MASKS = np.array(
         np.uint64(0x7F7F7F7F7F7F7F00),  # up-right
     ],
     dtype=np.uint64)
+
 _LSHIFTS = [0, 0, 0, 0, 1, 9, 8, 7]
 _RSHIFTS = [1, 9, 8, 7, 0, 0, 0, 0]
 
@@ -282,10 +283,6 @@ class OthelloGame(Game):
         else:
             return 0, True
 
-    def get_canonical_form(self, state, player):
-        # return state if player==1, else return -state if player==-1
-        return player * state
-
     def get_symmetries(self, state, pi):
         assert len(pi) == self.n**2 + 1
         pi_board = np.reshape(pi[:-1], (self.n, self.n))
@@ -300,13 +297,6 @@ class OthelloGame(Game):
                 sym.append((new_board, list(new_pi.ravel()) + [pi[-1]]))
         return sym
 
-    def string_representation(self, state):
-        return state.tobytes()
-
-    def string_representation_readable(self, state):
-        return "".join(self.square_content[square] for row in state
-                       for square in row)
-
     def get_score(self, state, player):
         b = Board(self.n)
         b.pieces = state.copy()
@@ -314,19 +304,6 @@ class OthelloGame(Game):
 
     def get_opponent(self, player):
         return -player
-
-    @staticmethod
-    def display(state):
-        n = state.shape[0]
-        header = "   " + " ".join(str(i) for i in range(n))
-        print(header)
-        print("-" * (len(header) + 2))
-        for y in range(n):
-            row_str = f"{y} | " + " ".join(OthelloGame.square_content[state[y,
-                                                                            x]]
-                                           for x in range(n)) + " |"
-            print(row_str)
-        print("-" * (len(header) + 2))
 
 
 class OthelloGameNew(Game):
@@ -475,10 +452,6 @@ class OthelloGameNew(Game):
         else:
             return 0, True
 
-    # --------------- untouched helpers / logging -----------------------
-    def get_canonical_form(self, state, player):
-        return player * state
-
     def get_symmetries(self, state, pi):
         assert len(pi) == self._action_size
         pi_board = np.reshape(pi[:-1], (self.n, self.n))
@@ -492,26 +465,8 @@ class OthelloGameNew(Game):
             sym.append((flip_s, list(flip_p.ravel()) + [pi[-1]]))
         return sym
 
-    def string_representation(self, state):
-        return state.tobytes()
-
-    def string_representation_readable(self, state):
-        return "".join(self.square_content[sq] for row in state for sq in row)
-
     def get_score(self, state, player):
         return int(np.sum(state == player) - np.sum(state == -player))
 
     def get_opponent(self, player):
         return -player
-
-    @staticmethod
-    def display(state):
-        n = state.shape[0]
-        header = "   " + " ".join(str(i) for i in range(n))
-        print(header)
-        print("-" * (len(header) + 2))
-        for y in range(n):
-            row = " ".join(OthelloGame.square_content[state[y, x]]
-                           for x in range(n))
-            print(f"{y} | {row} |")
-        print("-" * (len(header) + 2))

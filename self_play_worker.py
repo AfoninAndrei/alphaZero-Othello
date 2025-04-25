@@ -4,7 +4,7 @@ import numpy as np
 
 from MCTS_model import MCTS
 from Models import FastOthelloNet
-from envs.othello import OthelloGame
+from envs.othello import OthelloGameNew as OthelloGame
 
 
 @torch.no_grad()
@@ -13,11 +13,7 @@ def one_self_play(args_tuple):
     Single complete self‑play game executed in a child process.
     Returns a list of (state, improved_policy, value) triples.
     """
-    worker_id, board_size, args, policy_state, seed = args_tuple
-    # ----- reproducibility inside each worker
-    np.random.seed(seed + worker_id)
-    random.seed(seed + worker_id)
-    torch.manual_seed(seed + worker_id)
+    board_size, args, policy_state = args_tuple
 
     # ----- reconstruct lightweight objects inside the worker
     env = OthelloGame(board_size)
