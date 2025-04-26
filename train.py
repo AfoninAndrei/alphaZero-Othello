@@ -1,5 +1,8 @@
 import time
 import os
+
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import copy
 import torch
 import torch.nn as nn
@@ -11,6 +14,7 @@ from multiprocessing import get_context
 from eval import evaluate_models_parallel, _worker_init
 from self_play_worker import one_self_play
 from Models import FastOthelloNet
+from concurrent.futures import ThreadPoolExecutor
 
 # TODO: parallelize MCTS search as well?
 
@@ -48,7 +52,7 @@ class Trainer:
         self.policy = policy
         self.num_simulations = self.args['num_simulations']
 
-        self.train_device = torch.device("mps")
+        self.train_device = torch.device("cuda")
         # important to copy, otherwise we update both models during training
         self.best_policy = copy.deepcopy(self.policy).eval()
 
@@ -104,14 +108,15 @@ class Trainer:
     def collect_self_play_games(self):
         """Run `num_self_play` games in parallel and extend
         `self.current_training_data`."""
-        ctx = get_context("spawn")
+        ctx = get_context("forkserver")
+        state = self.best_policy.state_dict()
         base_seed = np.random.randint(1_000_000)
         with ctx.Pool(self.args["num_workers"],
                       initializer=_worker_init,
-                      initargs=(base_seed, )) as pool:
+                      initargs=(base_seed, ),
+                      maxtasksperchild=100) as pool:
             # Prepare a tuple of arg‑tuples so we can stream them
-            work_items = [(self.board_size, self.args,
-                           self.best_policy.state_dict())
+            work_items = [(self.board_size, self.args, state)
                           for _ in range(self.args["num_self_play"])]
 
             # chunksize=1 → each worker returns as soon as it finishes

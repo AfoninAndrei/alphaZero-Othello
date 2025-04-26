@@ -55,14 +55,15 @@ def evaluate_models_parallel(board_size,
                              policy_state_dict,
                              best_policy_state_dict,
                              n_matches=20):
-    ctx = get_context("spawn")
+    ctx = get_context("forkserver")
     wins_a = 0
     wins_b = 0
     base_seed = np.random.randint(1_000_000)  # any seed you like
 
     with ctx.Pool(args["num_workers"],
                   initializer=_worker_init,
-                  initargs=(base_seed, )) as pool:
+                  initargs=(base_seed, ),
+                  maxtasksperchild=100) as pool:
         # Prepare a tuple of arg‑tuples so we can stream them
         work_items = [(match_idx, board_size, args, policy_state_dict,
                        best_policy_state_dict)
