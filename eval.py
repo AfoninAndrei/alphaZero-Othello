@@ -165,8 +165,6 @@ def play_match(env, mcts_first, mcts_second):
                                                            temp=0.0)
         action = np.argmax(action_probs)
         # update the root node of the trees
-        mcts_first.make_move(action)
-        mcts_second.make_move(action)
         state = env.get_next_state(state, action, player)
 
         reward, done = env.get_value_and_terminated(state, action, player)
@@ -179,6 +177,9 @@ def play_match(env, mcts_first, mcts_second):
                 return "B" if player == 1 else "A"
             else:
                 return "Draw"
+
+        mcts_first.make_move(action)
+        mcts_second.make_move(action)
         player = env.get_opponent(player)
 
 

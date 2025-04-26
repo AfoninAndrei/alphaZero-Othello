@@ -14,8 +14,6 @@ from Models import FastOthelloNet
 
 # TODO: parallelize MCTS search as well?
 
-# TODO: speed up the othello env even more
-
 # TODO: probably it makes sense to try parallel search in the tree
 # then accumulate batch of things to evaluate -> run inference on mps
 

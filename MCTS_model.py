@@ -1,3 +1,7 @@
+import os
+
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import math
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -108,8 +112,10 @@ class Node:
             self.visit_count += 1
             self.value_sum += value
 
-    def expand(self, action: int, child_state: np.ndarray, child_prior: float):
+    def expand(self, action: int, child_prior: float):
+        action = int(action)
         next_player = self.env.get_opponent(self.player)
+        child_state = self.env.get_next_state(self.state, action, self.player)
         child_node = Node(env=self.env,
                           args=self.args,
                           state=child_state,
@@ -153,10 +159,12 @@ class MCTS:
 
         # Keep a persistent tree (root) between moves.
         self.root = None
-        self.num_threads: int = max(1, self.args.get("num_threads", 10))
+        self.num_threads: int = max(1, self.args.get("num_threads", 4))
+        self.pool = ThreadPoolExecutor(max_workers=self.num_threads)
 
     def make_move(self, action):
         # this assumes that env is deterministic
+        action = int(action)
         if not self.root:
             # in case we play 2nd and it is the 1st move
             return
@@ -173,7 +181,7 @@ class MCTS:
         if self.root is None:
             self.root = Node(env=self.env,
                              args=self.args,
-                             state=init_state,
+                             state=init_state.copy(),
                              player=init_player,
                              action=None)
         else:
@@ -181,9 +189,15 @@ class MCTS:
             assert np.all(self.root.state == init_state)
             assert self.root.player == init_player
 
-        for _ in range(self.args['num_simulations'] + 1):
-            # simulate until the leaf node
-            self._simulate(self.root)
+        if self.root.is_leaf():  # root never explored yet
+            self._expand_and_evaluate(self.root)
+
+        sims = self.args["num_simulations"]
+        futs = [
+            self.pool.submit(self._simulate, self.root) for _ in range(sims)
+        ]
+        for f in futs:
+            f.result()
 
         counts = np.zeros(self.num_actions, dtype=np.float32)
         for action, child_node in self.root.children.items():
@@ -195,7 +209,9 @@ class MCTS:
             best_actions = np.where(counts == counts.max())[0]
             best_action = np.random.choice(best_actions)
             probs = np.zeros_like(counts)
-            probs[best_action] = 1.0
+
+            if len(self.root.valid_actions) != 0:
+                probs[best_action] = 1.0
 
         else:
             counts_exp = counts**(1.0 / temp)
@@ -223,7 +239,7 @@ class MCTS:
         """
         # Rollout is MC estimation of the the value function
         # Using policy for value setimation is like TD-learning
-        current_state = state
+        current_state = state.copy()
         current_player = player
         while True:
             valid_moves = self.env.get_valid_moves(current_state,
@@ -274,13 +290,10 @@ class MCTS:
         # Expand each valid move
         for action in leaf.valid_actions:
             # Construct next state
-            next_state = leaf.state
-            # Apply the move for 'leaf.player'
-            next_state = self.env.get_next_state(next_state, action,
-                                                 leaf.player)
+            action = int(action)
 
             # Child’s prior from policy distribution
-            leaf.expand(action, next_state, priors[action])
+            leaf.expand(action, priors[action])
 
         # Backprop the leaf_value from the policy to this leaf
         leaf.backpropagate(leaf_value)
@@ -290,7 +303,7 @@ class MCTS:
         PUCT selection among the children of 'node'.
         """
         best_a = max(
-            (a for a in node.valid_actions if a in node.children),
+            (int(a) for a in node.valid_actions if int(a) in node.children),
             key=lambda a: node._get_ucb_score(a, node.children[a].prior),
         )
         return node.children[best_a]
