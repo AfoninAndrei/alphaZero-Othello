@@ -452,21 +452,36 @@ class OthelloGameNew(Game):
         else:
             return 0, True
 
-    def get_symmetries(self, state, pi):
-        assert len(pi) == self._action_size
-        pi_board = np.reshape(pi[:-1], (self.n, self.n))
-        sym = []
-        for k in range(4):
-            rot_s = np.rot90(state, k)
-            rot_p = np.rot90(pi_board, k)
-            sym.append((rot_s, list(rot_p.ravel()) + [pi[-1]]))
-            flip_s = np.fliplr(rot_s)
-            flip_p = np.fliplr(rot_p)
-            sym.append((flip_s, list(flip_p.ravel()) + [pi[-1]]))
-        return sym
-
     def get_score(self, state, player):
         return int(np.sum(state == player) - np.sum(state == -player))
 
     def get_opponent(self, player):
         return -player
+
+
+def get_random_symmetry(state: np.ndarray, pi: np.ndarray):
+    """
+    Apply one random dihedral–8 symmetry and return
+    (state[C, n, n], pi[n*n+1]).
+    """
+    n = state.shape[-1]
+    k = np.random.randint(4)
+    flip = np.random.rand() < 0.5
+
+    s = np.rot90(state, k, axes=(-2, -1))
+    pb = np.rot90(pi[:-1].reshape(n, n), k)
+
+    if flip:
+        s = np.fliplr(s)
+        pb = np.fliplr(pb)
+
+    # --- add channel dim if state was 2-D ----------------------------------
+    if s.ndim == 2:  # (n, n)  →  (1, n, n)
+        s = s[None, :, :]
+
+    # --- make both arrays positive-stride & contiguous ---------------------
+    s = np.ascontiguousarray(s, dtype=np.float32)
+    pi_out = np.concatenate([pb.ravel(), pi[-1:]]).astype(np.float32,
+                                                          copy=False)
+
+    return s, pi_out

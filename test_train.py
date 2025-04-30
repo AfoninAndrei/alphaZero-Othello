@@ -93,7 +93,6 @@ def test_train():
         'lr': 5e-3,
         'weight_decay': 1e-4,
         'batch_size': 32,
-        'max_train_samples': 5000,
         'train_steps_per_iter': 5000,
         'mcts_temperature': 1.0,
         'num_iterations': 10,

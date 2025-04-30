@@ -5,17 +5,24 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import Dataset
 import numpy as np
 from multiprocessing import get_context
 
 from eval import evaluate_models_parallel, _worker_init
 from self_play_worker import one_self_play
 from Models import FastOthelloNet
+from envs.othello import get_random_symmetry
 
-# TODO: parallelize MCTS search as well?
+# TODO: why can't we beat the rollout 100% consistently?
+# model is too weak? target is too noisy?
+# probably since we still cannot beat the supervised model
+# we need to adapt the noiseness of the gt
 
-# TODO: probably it makes sense to try parallel search in the tree
-# then accumulate batch of things to evaluate -> run inference on mps
+# TODO: to get the most out of the collected data
+# and utilize the GPU more since it is not a bottleneck
+# (training time ~12sec, data collection ~80sec) we can
+# add augmentations to the training and increase number of epochs
 
 # TODO: try as a learning target to use q + z, instead of z
 # this should help to reduce the noise, also if we have duplicating data after data collection
@@ -32,10 +39,24 @@ from Models import FastOthelloNet
 # 4. Faster othello env ~25% speed up
 
 
-def infinite_dataloader(dataloader):
-    while True:
-        for batch in dataloader:
-            yield batch
+class RandomSymmetryDataset(Dataset):
+
+    def __init__(self, states, policies, values):
+        self.states = states  # still plain numpy arrays / lists
+        self.policies = policies
+        self.values = values
+
+    def __len__(self):
+        return len(self.states)
+
+    def __getitem__(self, idx):
+        s, p = get_random_symmetry(self.states[idx], self.policies[idx])
+        v = self.values[idx]
+
+        return (
+            torch.from_numpy(s),  # now contiguous, float32
+            torch.from_numpy(p),  # contiguous, float32
+            torch.tensor(v, dtype=torch.float32))
 
 
 class Trainer:
@@ -91,10 +112,10 @@ class Trainer:
         states = np.array(states, dtype=np.float32)
         policies = np.array(policies, dtype=np.float32)
         values = np.array(values, dtype=np.float32).reshape(-1, 1)
-        #TODO: States are saved as 2-D float32 boards; most AlphaZero style nets expect channels × H × W.
-        dataset = TensorDataset(torch.from_numpy(states),
-                                torch.from_numpy(policies),
-                                torch.from_numpy(values))
+        # dataset = TensorDataset(torch.from_numpy(states),
+        #                         torch.from_numpy(policies),
+        #                         torch.from_numpy(values))
+        dataset = RandomSymmetryDataset(states, policies, values)
         self.dataloader = DataLoader(dataset,
                                      batch_size=self.args['batch_size'],
                                      shuffle=True)
@@ -104,12 +125,16 @@ class Trainer:
         `self.current_training_data`."""
         ctx = get_context("spawn")
         base_seed = np.random.randint(1_000_000)
+        manager = ctx.Manager()
+        # there is no need to clean this cache until we
+        # find a new best model that does self-play
+        shared_cache = manager.dict()
         with ctx.Pool(self.args["num_workers"],
                       initializer=_worker_init,
                       initargs=(base_seed, )) as pool:
             # Prepare a tuple of arg‑tuples so we can stream them
             work_items = [(self.board_size, self.args,
-                           self.best_policy.state_dict())
+                           self.best_policy.state_dict(), shared_cache)
                           for _ in range(self.args["num_self_play"])]
 
             # chunksize=1 → each worker returns as soon as it finishes
@@ -125,7 +150,6 @@ class Trainer:
         total_value_loss = 0.0
         total_batches = 0
 
-        # dataloader_iter = infinite_dataloader(self.dataloader)
         for (state, target_policy, target_value) in self.dataloader:
             # predict
             state = state.to(self.train_device)
@@ -223,25 +247,24 @@ class Trainer:
 
 if __name__ == '__main__':
     mcts_args = {
-        'c_puct': 2.0,  # 1.0
-        'num_simulations': 100,  # 15
-        'dirichlet_alpha': 0.03,
+        'c_puct': 2.0,
+        'num_simulations': 100,
+        'dirichlet_alpha': 0.1,
         'dirichlet_epsilon': 0.25
     }
 
     train_args = {
-        'lr': 1e-3,
+        'lr': 3e-4,
         'weight_decay': 3e-6,
         'batch_size': 64,
-        'max_train_samples': 30000,
         'mcts_temperature': 1.0,
         'num_iterations': 200,
         'num_self_play': 100,
         'train_steps_per_iter': 20000,
         'eval_win_margin': 0.05,
         'num_eval_matches': 30,
-        'num_epochs': 15,
-        "num_workers": os.cpu_count() or 4
+        'num_epochs': 30,
+        "num_workers": os.cpu_count()
     }
 
     train_args.update(mcts_args)
@@ -250,7 +273,8 @@ if __name__ == '__main__':
     # Extra action for "pass"
     action_size = board_size * board_size + 1
 
-    policy = FastOthelloNet(board_size, action_size)
+    # policy = FastOthelloNet(board_size, action_size)
+    policy = torch.load("othello_policy_RL_best.pt")
     alphaZero = Trainer(board_size, train_args, policy)
 
     alphaZero.train()

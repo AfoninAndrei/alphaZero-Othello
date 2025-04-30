@@ -145,7 +145,8 @@ class MCTS:
                  args,
                  policy,
                  dirichlet_alpha=0.03,
-                 dirichlet_epsilon=0.0):
+                 dirichlet_epsilon=0.0,
+                 inference_cache=None):
         self.env = env
         self.args = args
         self.policy = policy
@@ -161,6 +162,7 @@ class MCTS:
         self.root = None
         self.num_threads: int = max(1, self.args.get("num_threads", 4))
         self.pool = ThreadPoolExecutor(max_workers=self.num_threads)
+        self.inference_cache = inference_cache
 
     def make_move(self, action):
         # this assumes that env is deterministic
@@ -261,6 +263,18 @@ class MCTS:
 
             current_player = self.env.get_opponent(current_player)
 
+    def _policy_inference(self, leaf):
+        if not self.inference_cache:
+            return self.policy.inference(leaf.state, leaf.player)
+
+        key = (leaf.state, leaf.player)
+        if key in self.inference_cache:
+            return self.inference_cache[key]
+
+        self.inference_cache[key] = self.policy.inference(
+            leaf.state, leaf.player)
+        return self.inference_cache[key]
+
     def _expand_and_evaluate(self, leaf: Node):
         """
         Use the policy to get (prior probabilities, value) at the leaf.
@@ -273,7 +287,7 @@ class MCTS:
             priors = np.ones(self.num_actions, dtype=np.float32)
             leaf_value = self._rollout(leaf.state, leaf.player)
         else:
-            priors, leaf_value = self.policy.inference(leaf.state, leaf.player)
+            priors, leaf_value = self._policy_inference(leaf)
 
         # add exploration noise
         if leaf == self.root and self.dirichlet_epsilon > 0:

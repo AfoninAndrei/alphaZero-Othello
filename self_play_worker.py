@@ -13,12 +13,14 @@ def one_self_play(args_tuple):
     Single complete self‑play game executed in a child process.
     Returns a list of (state, improved_policy, value) triples.
     """
-    board_size, args, policy_state = args_tuple
+    board_size, args, policy_state, inference_cache = args_tuple
 
     # ----- reconstruct lightweight objects inside the worker
     env = OthelloGame(board_size)
-    policy = FastOthelloNet(board_size,
-                            board_size * board_size + 1)  # +1 for "pass"
+    policy = FastOthelloNet(
+        board_size,
+        board_size * board_size + 1,
+    )  # +1 for "pass"
     policy.load_state_dict(policy_state)
     policy.eval()  # no gradients needed in self‑play
 
@@ -26,7 +28,8 @@ def one_self_play(args_tuple):
                 args,
                 policy,
                 dirichlet_alpha=args["dirichlet_alpha"],
-                dirichlet_epsilon=args["dirichlet_epsilon"])
+                dirichlet_epsilon=args["dirichlet_epsilon"],
+                inference_cache=inference_cache)
 
     trajectory = []
     state = env.get_initial_state()
