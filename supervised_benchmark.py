@@ -8,35 +8,48 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 import copy
 # Create PyTorch datasets and dataloaders.
-from Models import FastOthelloNet
+from Models import AlphaZeroNet, FastOthelloNet
 from collections import Counter
-
+from envs.othello import get_random_symmetry
 
 # dataset is taken from: https://github.com/dimitri-rusin/othello/tree/main
-class OthelloDataset(Dataset):
 
-    def __init__(self, examples):
-        """
-        examples: list of tuples (board_state, action, outcome)
-        """
-        self.boards = [
-            torch.tensor(e[0], dtype=torch.float32) for e in examples
-        ]
-        self.actions = [e[1] for e in examples]
-        self.outcomes = [e[2] for e in examples]
+# TODO: Augmentations help a lot to not overfit too early.
+BOARD_SIZE = 8
+
+
+class OthelloDataset(Dataset):
+    """
+    examples : list of (board_np, action_int, outcome_float)
+               board_np already in canonical form (current player = +1)
+    """
+
+    def __init__(self, examples, apply_augm: bool = False):
+        self.boards, self.actions, self.outcomes = zip(*examples)
+        self.apply_augm = apply_augm
 
     def __len__(self):
         return len(self.boards)
 
     def __getitem__(self, idx):
-        board = self.boards[idx]
-        action = torch.tensor(self.actions[idx], dtype=torch.long)
-        outcome = torch.tensor(self.outcomes[idx], dtype=torch.float32)
+        board_np, action, outcome = (self.boards[idx], self.actions[idx],
+                                     self.outcomes[idx])
+        if self.apply_augm:
+            pi = np.zeros(BOARD_SIZE * BOARD_SIZE + 1, dtype=np.float32)
+            pi[action] = 1.0
 
-        return board, action, outcome
+            board_np, pi = get_random_symmetry(board_np, pi)
 
+            # convert back to integer action label for CrossEntropy
+            action = int(np.argmax(pi))
+        board_np = np.ascontiguousarray(board_np, dtype=np.float32)
+        if board_np.ndim == 2:  # (8,8) → (1,8,8)
+            board_tensor = torch.from_numpy(board_np).unsqueeze(0)
+        else:  # (1,8,8) as is
+            board_tensor = torch.from_numpy(board_np)
 
-BOARD_SIZE = 8
+        return board_tensor, torch.tensor(action, dtype=torch.long), \
+               torch.tensor(outcome, dtype=torch.float32)
 
 
 def board_to_key(board):
@@ -296,6 +309,13 @@ def load_and_process_csv(csv_file,
         train_examples), remove_conflicting_duplicates(test_examples)
 
 
+def count_parameters(model):
+    total = sum(p.numel() for p in model.parameters())
+    trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"Total parameters: {total:,}")
+    print(f"Trainable parameters: {trainable:,}")
+
+
 if __name__ == '__main__':
     path = "/Users/andreiafonin/Downloads/othello_dataset.csv"
 
@@ -304,7 +324,7 @@ if __name__ == '__main__':
     print(f"Total training examples: {len(train_examples)}")
     print(f"Total testing examples: {len(test_examples)}")
 
-    train_dataset = OthelloDataset(train_examples)
+    train_dataset = OthelloDataset(train_examples, True)
     val_dataset = OthelloDataset(test_examples)
     train_loader = DataLoader(train_dataset,
                               batch_size=1024,
@@ -317,7 +337,9 @@ if __name__ == '__main__':
 
     # Set device.
     action_size = BOARD_SIZE * BOARD_SIZE + 1  # Extra action for "pass"
-    model = FastOthelloNet(BOARD_SIZE, action_size)
+    model = AlphaZeroNet(BOARD_SIZE, action_size)
+
+    count_parameters(model)
 
     if torch.backends.mps.is_available():
         device = torch.device("mps")
@@ -327,7 +349,7 @@ if __name__ == '__main__':
         print("Using CPU")
     model.to(device)
 
-    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+    optimizer = optim.Adam(model.parameters(), lr=3e-3, weight_decay=1e-4)
     criterion_policy = nn.CrossEntropyLoss()
     criterion_value = nn.MSELoss()
 
@@ -342,4 +364,4 @@ if __name__ == '__main__':
             f"Val Loss: {val_loss:.4f} | Policy Loss: {val_policy_loss:.4f} | "
             f"Value Loss: {val_value_loss:.4f} | Policy Accuracy: {policy_acc:.4f}"
         )
-        torch.save(model, 'othello_policy_supervised.pt')
+        torch.save(model, 'othello_policy_supervised_v2.pt')
