@@ -14,7 +14,7 @@ from envs.othello import get_random_symmetry
 
 # dataset is taken from: https://github.com/dimitri-rusin/othello/tree/main
 
-# TODO: Augmentations help a lot to not overfit too early.
+# TODO: Augmentations help a lot to not overfit too early. does it make sense to train for the early moves?
 BOARD_SIZE = 8
 
 
@@ -167,6 +167,16 @@ def apply_move(board, row, col, player):
     return new_board
 
 
+def keep_by_ply(ply: int) -> bool:
+    """Return True if this example should be kept."""
+    if ply < 8:  # plies   0–7
+        return np.random.rand() < 0.30  # keep 30%
+    elif ply < 16:  # plies  8–15
+        return np.random.rand() < 0.70  # keep 70%
+    else:  # 16+
+        return True
+
+
 def process_game(moves_str, outcome, board_size=BOARD_SIZE):
     """
     Processes a single game into training examples.
@@ -191,8 +201,8 @@ def process_game(moves_str, outcome, board_size=BOARD_SIZE):
 
     # Process moves in strides of 2 (since each move is two characters)
     num_moves = len(moves_str) // 2
-    for i in range(num_moves):
-        move = moves_str[2 * i:2 * i + 2]
+    for ply in range(num_moves):
+        move = moves_str[2 * ply:2 * ply + 2]
         coord = move_to_coord(move)
         # Compute action target: if pass, use index board_size*board_size, else compute index.
         if coord is None:
@@ -205,7 +215,7 @@ def process_game(moves_str, outcome, board_size=BOARD_SIZE):
         value_target = outcome if player == 1 else -outcome
         # Copy board state to avoid later mutation.
         board_copy = board.copy()
-        examples.append((board_copy * player, action, value_target))
+        examples.append((board_copy * player, action, value_target, ply))
         # Apply the move only if not a pass.
         if coord is not None:
             board = apply_move(board, row, col, player)
@@ -295,15 +305,19 @@ def load_and_process_csv(csv_file,
     for _, row in train_df.iterrows():
         outcome = float(row["winner"])
         moves_str = str(row["game_moves"]).strip()
-        game_examples = process_game(moves_str, outcome, board_size=board_size)
-        train_examples.extend(game_examples)
+        for board, action, value_target, ply in process_game(
+                moves_str, outcome, board_size):
+            if keep_by_ply(ply):
+                train_examples.append((board, action, value_target))
 
     test_examples = []
     for _, row in test_df.iterrows():
         outcome = float(row["winner"])
         moves_str = str(row["game_moves"]).strip()
-        game_examples = process_game(moves_str, outcome, board_size=board_size)
-        test_examples.extend(game_examples)
+        for board, action, value_target, ply in process_game(
+                moves_str, outcome, board_size):
+            if keep_by_ply(ply):
+                test_examples.append((board, action, value_target))
 
     return remove_conflicting_duplicates(
         train_examples), remove_conflicting_duplicates(test_examples)
@@ -337,7 +351,8 @@ if __name__ == '__main__':
 
     # Set device.
     action_size = BOARD_SIZE * BOARD_SIZE + 1  # Extra action for "pass"
-    model = AlphaZeroNet(BOARD_SIZE, action_size)
+    model = AlphaZeroNet(BOARD_SIZE, action_size, 8, 192)
+    # model = torch.load("othello_policy_supervised_v3.pt")
 
     count_parameters(model)
 
@@ -349,11 +364,22 @@ if __name__ == '__main__':
         print("Using CPU")
     model.to(device)
 
-    optimizer = optim.Adam(model.parameters(), lr=3e-3, weight_decay=1e-4)
+    init_lr = 3e-3
+    final_lr = 1e-4
+    optimizer = optim.Adam(model.parameters(), lr=init_lr, weight_decay=1e-4)
+    target_factor = final_lr / init_lr
+
+    def lr_lambda(epoch):
+        if epoch < 30:
+            return target_factor**(epoch / 30)
+        else:
+            return target_factor
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     criterion_policy = nn.CrossEntropyLoss()
     criterion_value = nn.MSELoss()
 
-    num_epochs = 500
+    num_epochs = 60
     for epoch in range(num_epochs):
         train_loss = train_epoch(model, train_loader, optimizer,
                                  criterion_policy, criterion_value, device)
@@ -364,4 +390,6 @@ if __name__ == '__main__':
             f"Val Loss: {val_loss:.4f} | Policy Loss: {val_policy_loss:.4f} | "
             f"Value Loss: {val_value_loss:.4f} | Policy Accuracy: {policy_acc:.4f}"
         )
-        torch.save(model, 'othello_policy_supervised_v2.pt')
+        torch.save(model, 'othello_policy_supervised_v5.pt')
+
+        scheduler.step()
