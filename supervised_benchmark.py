@@ -333,7 +333,8 @@ def count_parameters(model):
 if __name__ == '__main__':
     path = "/Users/andreiafonin/Downloads/othello_dataset.csv"
 
-    train_examples, test_examples = load_and_process_csv(path, BOARD_SIZE, 0.1)
+    train_examples, test_examples = load_and_process_csv(
+        path, BOARD_SIZE, 0.05)
 
     print(f"Total training examples: {len(train_examples)}")
     print(f"Total testing examples: {len(test_examples)}")
@@ -351,8 +352,7 @@ if __name__ == '__main__':
 
     # Set device.
     action_size = BOARD_SIZE * BOARD_SIZE + 1  # Extra action for "pass"
-    model = AlphaZeroNet(BOARD_SIZE, action_size, 8, 192)
-    # model = torch.load("othello_policy_supervised_v3.pt")
+    model = AlphaZeroNet(BOARD_SIZE, action_size, 8, 128)
 
     count_parameters(model)
 
@@ -379,7 +379,7 @@ if __name__ == '__main__':
     criterion_policy = nn.CrossEntropyLoss()
     criterion_value = nn.MSELoss()
 
-    num_epochs = 60
+    num_epochs = 40
     for epoch in range(num_epochs):
         train_loss = train_epoch(model, train_loader, optimizer,
                                  criterion_policy, criterion_value, device)
@@ -390,6 +390,6 @@ if __name__ == '__main__':
             f"Val Loss: {val_loss:.4f} | Policy Loss: {val_policy_loss:.4f} | "
             f"Value Loss: {val_value_loss:.4f} | Policy Accuracy: {policy_acc:.4f}"
         )
-        torch.save(model, 'othello_policy_supervised_v5.pt')
+        torch.save(model, 'othello_policy_supervised_v7.pt')
 
         scheduler.step()
