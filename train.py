@@ -1,5 +1,8 @@
 import time
 import os
+
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+
 import copy
 import torch
 import torch.nn as nn
@@ -125,7 +128,7 @@ class Trainer:
         self.benchmark_policy = benchmark_policy
         self.num_simulations = self.args['num_simulations']
 
-        self.train_device = torch.device("mps")
+        self.train_device = torch.device("cuda")
         # important to copy, otherwise we update both models during training
         self.best_policy = copy.deepcopy(self.policy).eval()
 
@@ -192,13 +195,15 @@ class Trainer:
     def collect_self_play_games(self):
         """Run `num_self_play` games in parallel and extend
         `self.current_training_data`."""
-        ctx = get_context("spawn")
+        ctx = get_context("forkserver")
+        state = self.best_policy.state_dict()
         base_seed = np.random.randint(1_000_000)
         # there is no need to clean this cache until we
         # find a new best model that does self-play
         with ctx.Pool(self.args["num_workers"],
                       initializer=_worker_init,
-                      initargs=(base_seed, )) as pool:
+                      initargs=(base_seed, ),
+                      maxtasksperchild=100) as pool:
             # Prepare a tuple of arg‑tuples so we can stream them
             work_items = [(self.board_size, self.args,
                            self.best_policy.state_dict(), self.shared_cache)
