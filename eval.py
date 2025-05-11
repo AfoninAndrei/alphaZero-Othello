@@ -10,7 +10,7 @@ import numpy as np
 
 from MCTS_model import MCTS
 from envs.othello import OthelloGameNew as OthelloGame
-from Models import FastOthelloNet
+from Models import FastOthelloNet, AlphaZeroNet
 
 import time
 
@@ -318,37 +318,40 @@ def plot_value_trajectories(curves_A, results_A, curves_B, results_B):
 
 
 if __name__ == "__main__":
-    args = {'c_puct': 2.0, 'num_simulations': 200, 'mcts_temperature': 1.0}
+    args = {'c_puct': 2.0, 'num_simulations': 100, 'num_threads': 1}
     board_size = 8
     env = OthelloGame(board_size)
     model_path = "othello_policy_RL.pt"
     policy = torch.load(model_path)
 
     model_path_supervised = "othello_policy_supervised.pt"
+    # model_path_supervised = "othello_policy_RL.pt"
     policy_supervised = torch.load(model_path_supervised)
     mcts = MCTS(env, args, policy)
 
-    args_opponent = {
-        'c_puct': 1.0,
-        'num_simulations': 100,
-        'mcts_temperature': 1.0
-    }
+    args_opponent = {'c_puct': 2.0, 'num_simulations': 100, 'num_threads': 1}
 
     mcts_opponent = MCTS(env, args_opponent, policy_supervised)
 
     start_time = time.time()
-    print(play_match(env, mcts, mcts_opponent))
+    print(play_match(env, mcts_opponent, mcts))
     print('Time taken', time.time() - start_time)
+
+    # mcts = MCTS(env, args, policy)
+    # mcts_opponent = MCTS(env, args_opponent, policy_supervised)
+    # start_time = time.time()
+    # print(play_match(env, mcts_opponent, mcts))
+    # print('Time taken', time.time() - start_time)
 
     # TODO: Compare the curves for the model vs model with MCTS - this should show
     # how far it is from being optimal?
     # let's compare it to the MCTS prediction rollout and supervised model
 
-    # args_A = {'c_puct': 2.0, 'num_simulations': 2, 'mcts_temperature': 1.0}
-    # args_B = {'c_puct': 2.0, 'num_simulations': 2, 'mcts_temperature': 1.0}
+    # args_A = {'c_puct': 2.0, 'num_simulations': 100}
+    # args_B = {'c_puct': 2.0, 'num_simulations': 100}
 
     # curves_A, res_A, curves_B, res_B = collect_value_trajectories(
-    #     env, args_A, policy, args_B, policy_supervised, n_matches=5)
+    #     env, args_A, policy, args_B, policy_supervised, n_matches=2)
 
     # plot_value_trajectories(curves_A, res_A, curves_B, res_B)
     # plt.show()

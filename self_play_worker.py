@@ -14,6 +14,8 @@ def get_training_data(trajectory, winning_player):
     return trajectory
 
 
+# TODO: probably we have a deadly triad issue if we bootstrap on the values
+# maybe it makes sense to clean the data in this case
 # def get_training_data(trajectory, winning_player, lambd: float = 1.0):
 
 #     def z_for(p):
