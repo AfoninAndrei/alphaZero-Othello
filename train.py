@@ -118,7 +118,21 @@ class RandomSymmetryDataset(Dataset):
                 torch.from_numpy(np.ascontiguousarray(p)),
                 torch.as_tensor(v, dtype=torch.float32))
 
+# TODO: during inference we need to explore more with less
+# peaked probabillity, opponent should not surpise us! 
+# if your policy is very peaked even increasing the number
+# of simulations cannot help to recover strong strategies
+    
+# TODO: during inference: shall we search with UCT, but choose
+# the move based on value accumulated, not visit counter
+    
+# TODO: I notices rock-paper-scissors situation when we promote
+# the model, model is not robust and during MCTS it does not search
+# other possibilities, by introducing entropy we make model more robust
+# to newer strategies and this situation seems to be at least reduced
 
+# TODO: Monitor average exploration depth in the tree seems like an
+# interesting metric 
 class Trainer:
 
     def __init__(self, board_size, args, policy, benchmark_policy=None):
@@ -128,7 +142,7 @@ class Trainer:
         self.benchmark_policy = benchmark_policy
         self.num_simulations = self.args['num_simulations']
 
-        self.train_device = torch.device("cuda")
+        self.train_device = torch.device("mps")
         # important to copy, otherwise we update both models during training
         self.best_policy = copy.deepcopy(self.policy).eval()
 
@@ -235,7 +249,7 @@ class Trainer:
 
         states = torch.stack(states, 0).to(self.train_device)
         targets_v = torch.stack(targets_v,
-                                0).unsqueeze(1).to(self.train_device)
+                                0).to(self.train_device)
 
         _, pred_v = self.policy(states)
         diff = pred_v - targets_v
@@ -268,9 +282,10 @@ class Trainer:
     def train_iters(self):
         self.policy.to(self.train_device)
         self.policy.train()
-        total_policy_loss = 0.0
-        total_value_loss = 0.0
+        total_policy_loss = total_value_loss = total_entropy_loss = 0.0
         total_batches = 0
+
+        lambda_entropy = self.args.get("entropy_coef", 0.08)
 
         for (state, target_policy, target_value) in self.dataloader:
             # predict
@@ -283,10 +298,13 @@ class Trainer:
             log_probs = F.log_softmax(policy_logits, dim=-1)
             policy_loss = -torch.mean(
                 torch.sum(target_policy * log_probs, dim=-1))
+            probs       = torch.softmax(policy_logits, dim=-1)
+            entropy     = torch.mean(torch.sum(-probs * log_probs, dim=-1))  # H(π)
+            entropy_loss= -lambda_entropy * entropy                                # <‑‑ new
             # compute value loss
             value_loss = self.value_loss(value, target_value)
 
-            loss = policy_loss + value_loss
+            loss = policy_loss + value_loss + entropy_loss  
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -295,10 +313,12 @@ class Trainer:
 
             total_policy_loss += policy_loss.cpu().item()
             total_value_loss += value_loss.cpu().item()
+            total_entropy_loss     += -entropy_loss.detach().cpu().item()
             total_batches += 1
 
         avg_policy_loss = total_policy_loss / total_batches
         avg_value_loss = total_value_loss / total_batches
+        avg_entropy_loss     = total_entropy_loss     / total_batches 
         avg_total_loss = avg_policy_loss + avg_value_loss
 
         val_bias, val_mse     = self._probe_value_bias()
@@ -308,13 +328,16 @@ class Trainer:
         self.metrics_history['value_loss'].append(avg_value_loss)
         self.metrics_history['total_loss'].append(avg_total_loss)
 
+        self.metrics_history.setdefault('avg_entropy', []).append(avg_entropy_loss)
         self.metrics_history.setdefault('value_bias',  []).append(val_bias)
         self.metrics_history.setdefault('value_mse',   []).append(val_mse)
         self.metrics_history.setdefault('net_entropy', []).append(H_net)
         self.metrics_history.setdefault('mcts_entropy',[]).append(H_target)
 
         print(
-            f"Policy L={avg_policy_loss:.4f}  Value L={avg_value_loss:.4f}  "
+            f"Policy L={avg_policy_loss:.4f}  "
+            f"Value L={avg_value_loss:.4f}  "
+            f"H_bonus=×{avg_entropy_loss:.2f}  "
             f"Δv={val_bias:+.3f}  MSE={val_mse:.3f}  "
             f"H_net={H_net:.2f}  H_mcts={H_target:.2f}"
         )
@@ -393,7 +416,7 @@ if __name__ == '__main__':
         'num_exploratory_moves': 35,
         'num_iterations': 200,
         'num_self_play': 100,
-        'replay_buffer_size': 1e5,
+        'replay_buffer_size': int(1e5),
         'train_steps_per_iter': 5000,
         'eval_win_margin': 0.1,
         'num_eval_matches': 50,

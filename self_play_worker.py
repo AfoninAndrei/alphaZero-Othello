@@ -5,45 +5,42 @@ from MCTS_model import MCTS
 from Models import FastOthelloNet
 from envs.othello import OthelloGameNew as OthelloGame
 
+# def get_training_data(trajectory, winning_player):
+#     for i, (st, pol, ply, value) in enumerate(trajectory):
+#         outcome = 1 if ply == winning_player else (
+#             -1 if winning_player != 0 else 0)
+#         trajectory[i] = (st, pol, outcome)
+#     return trajectory
 
-def get_training_data(trajectory, winning_player):
-    for i, (st, pol, ply, value) in enumerate(trajectory):
-        outcome = 1 if ply == winning_player else (
-            -1 if winning_player != 0 else 0)
-        trajectory[i] = (st, pol, outcome)
-    return trajectory
 
+def get_training_data(trajectory, winning_player, lambd: float = 0.9):
 
-# TODO: probably we have a deadly triad issue if we bootstrap on the values
-# maybe it makes sense to clean the data in this case
-# def get_training_data(trajectory, winning_player, lambd: float = 1.0):
+    def z_for(p):
+        if winning_player == 0:  # draw
+            return 0.0
+        return 1.0 if p == winning_player else -1.0
 
-#     def z_for(p):
-#         if winning_player == 0:  # draw
-#             return 0.0
-#         return 1.0 if p == winning_player else -1.0
+    out = [None] * len(trajectory)
+    G_next = None  # G_{t+1}
+    next_player = None  # player_{t+1}
 
-#     out = [None] * len(trajectory)
-#     G_next = None  # G_{t+1}
-#     next_player = None  # player_{t+1}
+    # walk the trajectory backward
+    for t in reversed(range(len(trajectory))):
+        state, π, player, v_root = trajectory[t]
+        mc = z_for(player)  # Monte‑Carlo outcome from *this* player’s view
 
-#     # walk the trajectory backward
-#     for t in reversed(range(len(trajectory))):
-#         state, π, player, v_root = trajectory[t]
-#         mc = z_for(player)  # Monte‑Carlo outcome from *this* player’s view
+        if G_next is None:  # closest to terminal
+            G_t = mc
+        else:
+            # flip sign if the side‑to‑move switched between t and t+1
+            sign = 1.0 if player == next_player else -1.0
+            G_t = (1.0 - lambd) * v_root + lambd * sign * G_next
 
-#         if G_next is None:  # closest to terminal
-#             G_t = mc
-#         else:
-#             # flip sign if the side‑to‑move switched between t and t+1
-#             sign = 1.0 if player == next_player else -1.0
-#             G_t = (1.0 - lambd) * v_root + lambd * sign * G_next
+        out[t] = (state, π, G_t)
+        G_next = G_t
+        next_player = player  # becomes “player_{t+1}” for the previous step
 
-#         out[t] = (state, π, G_t)
-#         G_next = G_t
-#         next_player = player  # becomes “player_{t+1}” for the previous step
-
-#     return out
+    return out
 
 
 @torch.no_grad()
