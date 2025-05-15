@@ -17,7 +17,7 @@ import random
 
 from eval import evaluate_models_parallel, _worker_init
 from self_play_worker import one_self_play
-from Models import FastOthelloNet
+from Models import FastOthelloNet, AlphaZeroNet
 from envs.othello import get_random_symmetry
 
 # TODO: Clean the code, add typing, add dosctring
@@ -126,6 +126,7 @@ class Trainer:
         self.args = args
         self.policy = policy
         self.benchmark_policy = benchmark_policy
+        self.curr_benchmark_policy = None
         self.num_simulations = self.args['num_simulations']
 
         self.train_device = torch.device("cuda")
@@ -154,7 +155,7 @@ class Trainer:
             'current_best_win_rate': []
         }
 
-        ctx = get_context("spawn")
+        ctx = get_context("forkserver")
         self.manager = ctx.Manager()
         time.sleep(0.5)
         # persistent cache
@@ -368,7 +369,7 @@ class Trainer:
                 self.board_size,
                 self.args,
                 self.policy.state_dict(),
-                self.benchmark_policy.state_dict(),
+                self.curr_benchmark_policy.state_dict() if self.curr_benchmark_policy is not None else None,
                 n_matches=30)
             self.metrics_history['benchmark_win_rate'].append(current_win_rate)
             self.metrics_history['current_best_win_rate'].append(best_win_rate)
@@ -376,28 +377,42 @@ class Trainer:
                 f"Eval against bencmark: Win Rate Current {current_win_rate*100:.1f}% vs Win rate Benchmark: {best_win_rate*100:.1f}%"
             )
 
+            if self.curr_benchmark_policy is None and current_win_rate > 0.9:
+                print("🎉  Rollout beaten (>90 %). "
+                        "Promoting given benchmark net as benchmark and "
+                        "increasing simulations to 400.")
+                self.curr_benchmark_policy = self.benchmark_policy
+                self.num_simulations = 400
+                self.args['num_simulations'] = 400
+
+                new_lr = 3e-4
+                for pg in self.optimizer.param_groups:   # <‑‑ add these
+                    pg['lr'] = new_lr                    #     three lines
+                self.args['lr'] = new_lr
+
+
 
 if __name__ == '__main__':
     mcts_args = {
         'c_puct': 2.0,
-        'num_simulations': 200,
+        'num_simulations': 100,
         'dirichlet_alpha': 1.0,
         'dirichlet_epsilon': 0.3
     }
 
     train_args = {
-        'lr': 1e-4,
+        'lr': 1e-3,
         'weight_decay': 3e-6,
         'batch_size': 256,
         'mcts_temperature': 1.0,
         'num_exploratory_moves': 35,
-        'num_iterations': 200,
-        'num_self_play': 100,
-        'replay_buffer_size': 1e5,
+        'num_iterations': 2000,
+        'num_self_play': 300,
+        'replay_buffer_size': int(2e5),
         'train_steps_per_iter': 5000,
         'eval_win_margin': 0.1,
         'num_eval_matches': 50,
-        'num_epochs': 30,
+        'num_epochs': 60,
         "num_workers": os.cpu_count()
     }
 
@@ -409,9 +424,12 @@ if __name__ == '__main__':
 
     # policy = FastOthelloNet(board_size, action_size)
     # TODO: add both rollout and bencmark policy to the eval
-    policy = torch.load("othello_policy_RL.pt")
-    bencnmark_policy = torch.load("othello_policy_supervised.pt")
-    bencnmark_policy = bencnmark_policy.cpu()
+    # policy = torch.load("othello_policy_RL.pt")
+    bencnmark_policy = AlphaZeroNet(board_size, action_size, 10, 128)  # create model instance
+    bencnmark_policy.load_state_dict(torch.load('othello_policy_supervised_v7_best.pt'))
+    bencnmark_policy.eval()
+    
+    policy = AlphaZeroNet(board_size, action_size, 10, 128)
     alphaZero = Trainer(board_size, train_args, policy, bencnmark_policy)
     alphaZero.train()
 
