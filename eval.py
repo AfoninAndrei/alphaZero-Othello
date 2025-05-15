@@ -105,14 +105,14 @@ def _run_one_match(args_tuple):
     policy, best_policy = None, None
 
     if policy_state is not None:
-        policy = FastOthelloNet(board_size,
-                                board_size * board_size + 1)  # +1 for "pass"
+        policy = AlphaZeroNet(board_size,
+                                board_size * board_size + 1, 10, 128)  # +1 for "pass"
         policy.load_state_dict(policy_state)
         policy.eval()
 
     if best_policy_state is not None:
-        best_policy = FastOthelloNet(board_size, board_size * board_size +
-                                     1)  # +1 for "pass"
+        best_policy = AlphaZeroNet(board_size, board_size * board_size +
+                                     1, 10, 128)  # +1 for "pass"
         best_policy.load_state_dict(best_policy_state)
         best_policy.eval()
 

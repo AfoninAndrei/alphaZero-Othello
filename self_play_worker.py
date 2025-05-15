@@ -2,7 +2,7 @@ import torch
 import numpy as np
 
 from MCTS_model import MCTS
-from Models import FastOthelloNet
+from Models import FastOthelloNet, AlphaZeroNet
 from envs.othello import OthelloGameNew as OthelloGame
 
 # def get_training_data(trajectory, winning_player):
@@ -53,9 +53,10 @@ def one_self_play(args_tuple):
 
     # ----- reconstruct lightweight objects inside the worker
     env = OthelloGame(board_size)
-    policy = FastOthelloNet(
+    policy = AlphaZeroNet(
         board_size,
         board_size * board_size + 1,
+        10, 128
     )  # +1 for "pass"
     policy.load_state_dict(policy_state)
     policy.eval()  # no gradients needed in self‑play
