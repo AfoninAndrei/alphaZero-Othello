@@ -9,7 +9,7 @@ import numpy as np
 from typing import Dict, Any, List
 
 EPS = 1e-8
-VIRTUAL_LOSS = 3.0
+VIRTUAL_LOSS = 1.0
 
 
 class Node:
@@ -167,11 +167,18 @@ class MCTS:
     def make_move(self, action):
         # this assumes that env is deterministic
         action = int(action)
+        # for _, child in self.root.children.items():
+        #     print(child.action, child.visit_count, child.value, child.prior)
+
+        # print("Chosen:", self.root.children[action].action,
+        #       self.root.children[action].value)  # value stored on edge
+
         if not self.root:
             # in case we play 2nd and it is the 1st move
             return
-        self.root = self.root.children[action]
+
         # detach from the above tree
+        self.root = self.root.children[action]
         self.root.parent = None
 
     def policy_improve_step(self,
@@ -208,6 +215,14 @@ class MCTS:
 
         if abs(temp) < 1e-1:
             # Choose the action(s) with the highest visit_count
+            # COUNT_NUMBER = 70
+            # if np.any(counts > COUNT_NUMBER):
+            #     best_value = float('inf')
+            #     for action, child_node in self.root.children.items():
+            #         if child_node.visit_count > COUNT_NUMBER and child_node.value < best_value:
+            #             best_action = action
+            #             best_value = child_node.value
+            # else:
             best_actions = np.where(counts == counts.max())[0]
             best_action = np.random.choice(best_actions)
             probs = np.zeros_like(counts)

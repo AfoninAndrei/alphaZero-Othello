@@ -10,7 +10,7 @@ import numpy as np
 
 from MCTS_model import MCTS
 from envs.othello import OthelloGameNew as OthelloGame
-from Models import FastOthelloNet, AlphaZeroNet
+from Models import FastOthelloNet
 
 import time
 
@@ -52,8 +52,8 @@ def evaluate_models(board_size, args, policy, best_policy, n_matches=20):
 @torch.no_grad()
 def evaluate_models_parallel(board_size,
                              args,
-                             policy_state_dict,
-                             best_policy_state_dict,
+                             policy_state,
+                             best_policy_state,
                              n_matches=20):
     ctx = get_context("forkserver")
     wins_a = 0
@@ -65,9 +65,8 @@ def evaluate_models_parallel(board_size,
                   initargs=(base_seed, ),
                   maxtasksperchild=100) as pool:
         # Prepare a tuple of arg‑tuples so we can stream them
-        work_items = [(match_idx, board_size, args, policy_state_dict,
-                       best_policy_state_dict)
-                      for match_idx in range(n_matches)]
+        work_items = [(match_idx, board_size, args, policy_state,
+                       best_policy_state) for match_idx in range(n_matches)]
 
         # chunksize=1 → each worker returns as soon as it finishes
         for winner in pool.imap_unordered(_run_one_match,
@@ -105,15 +104,16 @@ def _run_one_match(args_tuple):
     policy, best_policy = None, None
 
     if policy_state is not None:
-        policy = AlphaZeroNet(board_size,
-                                board_size * board_size + 1, 10, 128)  # +1 for "pass"
-        policy.load_state_dict(policy_state)
+        (policy_class, policy_config, policy_state_dict) = policy_state
+        policy = policy_class(**policy_config)
+        policy.load_state_dict(policy_state_dict)
         policy.eval()
 
     if best_policy_state is not None:
-        best_policy = AlphaZeroNet(board_size, board_size * board_size +
-                                     1, 10, 128)  # +1 for "pass"
-        best_policy.load_state_dict(best_policy_state)
+        (best_policy_class, best_policy_config,
+         best_policy_state_dict) = best_policy_state
+        best_policy = best_policy_class(**best_policy_config)
+        best_policy.load_state_dict(best_policy_state_dict)
         best_policy.eval()
 
     # choose which policy is first based on i
@@ -319,18 +319,30 @@ def plot_value_trajectories(curves_A, results_A, curves_B, results_B):
 
 
 if __name__ == "__main__":
-    args = {'c_puct': 2.0, 'num_simulations': 100, 'num_threads': 1}
+    args = {'c_puct': 2.0, 'num_simulations': 400, 'num_threads': 1}
     board_size = 8
     env = OthelloGame(board_size)
-    model_path = "othello_policy_RL.pt"
-    policy = torch.load(model_path)
+    model_path = "othello_policy_RL_entropy_fastnet.pt"
+    # policy = torch.load(model_path)
 
-    model_path_supervised = "othello_policy_supervised.pt"
+    policy = FastOthelloNet(board_size, 65)
+    policy.load_state_dict(torch.load('othello_policy_RL_fast.pt'))
+    policy.eval()
+
+    model_path_supervised = "othello_policy_supervised_v3.pt"
     # model_path_supervised = "othello_policy_RL.pt"
-    policy_supervised = torch.load(model_path_supervised)
+    # policy_supervised = AlphaZeroNet(board_size, 65, 10,
+    #  128)  # create model instance
+    # policy_supervised.load_state_dict(torch.load(model_path_supervised))
+    # policy_supervised.eval()
+    # policy_supervised = torch.load(model_path_supervised)
+    policy_supervised = FastOthelloNet(board_size, 65)
+    policy_supervised.load_state_dict(
+        torch.load('othello_policy_RL_entropy_fastnet_state_dict.pt'))
+    policy_supervised.eval()
     mcts = MCTS(env, args, policy)
 
-    args_opponent = {'c_puct': 2.0, 'num_simulations': 100, 'num_threads': 1}
+    args_opponent = {'c_puct': 2.0, 'num_simulations': 400, 'num_threads': 1}
 
     mcts_opponent = MCTS(env, args_opponent, policy_supervised)
 
@@ -338,11 +350,11 @@ if __name__ == "__main__":
     print(play_match(env, mcts_opponent, mcts))
     print('Time taken', time.time() - start_time)
 
-    # mcts = MCTS(env, args, policy)
-    # mcts_opponent = MCTS(env, args_opponent, policy_supervised)
-    # start_time = time.time()
-    # print(play_match(env, mcts_opponent, mcts))
-    # print('Time taken', time.time() - start_time)
+    mcts = MCTS(env, args, policy)
+    mcts_opponent = MCTS(env, args_opponent, policy_supervised)
+    start_time = time.time()
+    print(play_match(env, mcts, mcts_opponent))
+    print('Time taken', time.time() - start_time)
 
     # TODO: Compare the curves for the model vs model with MCTS - this should show
     # how far it is from being optimal?

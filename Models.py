@@ -20,9 +20,20 @@ class Inference:
         board_input = board_input.to(device)
         # Evaluate
         self.eval()
+        # TODO: similar to LeelaZero?
+        # temperature = 1.2
         with torch.no_grad():
             policy_logits, value = self(board_input)
             policy = self.softmax(policy_logits)
+
+            # if temperature == 0.0:
+            #     # Return deterministic policy (argmax)
+            #     policy = torch.zeros_like(policy_logits)
+            #     policy[0, torch.argmax(policy_logits, dim=1)] = 1.0
+            # else:
+            #     # Apply temperature scaling before softmax
+            #     scaled_logits = policy_logits / temperature
+            #     policy = self.softmax(scaled_logits)
         # Convert to numpy
         policy = policy[0].cpu().numpy()
         value = value[0, 0].cpu().numpy().item()  # scalar
@@ -125,6 +136,12 @@ class FastOthelloNet(nn.Module, Inference):
 
         self.softmax = nn.Softmax(dim=-1)
 
+    def get_config(self):
+        return {
+            "board_size": self.board_size,
+            "action_size": self.action_size,
+        }
+
     def forward(self, x: torch.Tensor):
         """
         :param x: Tensor of shape [batch_size, board_size, board_size] with values in {-1, 0, +1}.
@@ -163,6 +180,11 @@ class AlphaZeroNet(nn.Module, Inference):
                  channels: int = 128):
         super().__init__()
 
+        self.board_size = board_size
+        self.action_size = action_size
+        self.n_res_blocks = n_res_blocks
+        self.channels = channels
+
         # -------- shared trunk --------
         self.conv0 = nn.Conv2d(1, channels, 3, padding=1, bias=False)
         self.bn0 = nn.BatchNorm2d(channels)
@@ -181,6 +203,14 @@ class AlphaZeroNet(nn.Module, Inference):
         self.val_fc2 = nn.Linear(256, 1)
 
         self.softmax = nn.Softmax(dim=-1)
+
+    def get_config(self):
+        return {
+            "board_size": self.board_size,
+            "action_size": self.action_size,
+            "n_res_blocks": self.n_res_blocks,
+            "channels": self.channels,
+        }
 
     def forward(self, x):
         if x.dim() == 3:

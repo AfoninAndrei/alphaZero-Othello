@@ -1,5 +1,6 @@
 import time
 import os
+import pickle
 
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
@@ -14,6 +15,7 @@ from multiprocessing import get_context
 from typing import Deque, List, Tuple
 from collections import deque
 import random
+import hashlib
 
 from eval import evaluate_models_parallel, _worker_init
 from self_play_worker import one_self_play
@@ -135,7 +137,7 @@ class RandomSymmetryDataset(Dataset):
 # interesting metric 
 class Trainer:
 
-    def __init__(self, board_size, args, policy, benchmark_policy=None):
+    def __init__(self, board_size, args, policy, self_play_policy=None, benchmark_policy=None):
         self.board_size = board_size
         self.args = args
         self.policy = policy
@@ -143,9 +145,14 @@ class Trainer:
         self.curr_benchmark_policy = None
         self.num_simulations = self.args['num_simulations']
 
-        self.train_device = torch.device("mps")
+        self.train_device = torch.device("mps" if torch.backends.mps.is_available() 
+                                         else "cuda" if torch.cuda.is_available() else "cpu")
         # important to copy, otherwise we update both models during training
-        self.best_policy = copy.deepcopy(self.policy).eval()
+        if self_play_policy is None:
+            self.best_policy = copy.deepcopy(self.policy).eval()
+        else:
+            self.best_policy = self_play_policy
+        self.model_version = 0
 
         self.value_loss = nn.MSELoss()
         self.optimizer = torch.optim.Adam(
@@ -153,9 +160,9 @@ class Trainer:
             lr=self.args['lr'],
             weight_decay=self.args['weight_decay'])
 
-        self.current_training_data = []
         self.dataloader = None
-        buf_size = self.args.get("replay_buffer_size", 100000)
+        buf_size = self.args.get("replay_buffer_size", 500000)
+        self.buffer_path = "replay_buffer.pkl"
         self.replay_buffer: Deque[Tuple[np.ndarray, np.ndarray,
                                         float]] = deque(maxlen=buf_size)
 
@@ -169,36 +176,88 @@ class Trainer:
             'current_best_win_rate': []
         }
 
-        ctx = get_context("forkserver")
+        ctx = get_context("spawn")
         self.manager = ctx.Manager()
         time.sleep(0.5)
         # persistent cache
         self.shared_cache = self.manager.dict()
 
-    def clean_training_data(self):
-        self.current_training_data = []
-
+    def _hash_state(self, board: np.ndarray) -> str:
+        """Fast, order-preserving hash for an int8 board."""
+        return hashlib.sha1(board.astype(np.int8).tobytes()).hexdigest()
+    
+    def _save_replay_buffer(self) -> None:
+        """Pickle the *entire* replay_buffer to disk (atomic write)."""
+        tmp_path = self.buffer_path + ".tmp"
+        with open(tmp_path, "wb") as f:
+            pickle.dump(self.replay_buffer, f, protocol=pickle.HIGHEST_PROTOCOL)
+        os.replace(tmp_path, self.buffer_path)
+    
+    def _load_replay_buffer(self) -> None:
+        """Populate self.replay_buffer from an existing pickle file."""
+        try:
+            with open(self.buffer_path, "rb") as f:
+                loaded = pickle.load(f)
+            # Keep user-defined maxlen
+            self.replay_buffer.clear()
+            self.replay_buffer.extend(loaded)
+            print(f"Loaded {len(self.replay_buffer):,} samples from "
+                  f"'{self.buffer_path}'")
+        except Exception as err:
+            print(f"⚠️  Could not load replay buffer ({err!s}); starting fresh.")
+    
     def _extend_buffer(
-            self, new_trajs: List[Tuple[np.ndarray, np.ndarray,
-                                        float]]) -> None:
-        """Append new (state, π, z) tuples into the replay buffer."""
-        self.replay_buffer.extend(new_trajs)
+            self,
+            new_trajs: List[Tuple[np.ndarray, np.ndarray, float]]) -> None:
+        ver = self.model_version
+        self.replay_buffer.extend((s, p, v, ver) for (s, p, v) in new_trajs)
+
+        self._save_replay_buffer()
+    
+    def _aggregate_duplicates(self
+                              ) -> Tuple[List[np.ndarray],
+                                         List[np.ndarray],
+                                         List[float]]:
+        """
+        Collapse duplicates that stem from the *same* model version.
+        Returns three aligned Python lists (states, avg-pi, avg-v).
+        """
+        buckets = {}  # key = (hash, version)
+        for (s, pi, v, ver) in self.replay_buffer:
+            key = (self._hash_state(s), ver)
+            if key not in buckets:
+                buckets[key] = {
+                    "state": s,
+                    "sum_pi": pi.copy(),
+                    "sum_v": v,
+                    "count": 1,
+                }
+            else:
+                b = buckets[key]
+                b["sum_pi"] += pi
+                b["sum_v"]  += v
+                b["count"]  += 1
+
+        states, policies, values = [], [], []
+        for b in buckets.values():
+            cnt = b["count"]
+            avg_pi = b["sum_pi"] / cnt          # arithmetic mean of dists
+            avg_pi /= avg_pi.sum() + 1e-12          # re-normalise, safe
+            v = b["sum_v"] / cnt
+            states.append(b["state"])
+            policies.append(avg_pi.astype(np.float32))
+            values.append(np.float32(v))
+        return states, policies, values
 
     def setup_dataloader(self):
         """
         Convert self.current_training_data (list of (state, policy, value))
         into a PyTorch DataLoader for training.
-        """
+        """        
+        states, policies, values = self._aggregate_duplicates()
+        print(f"Collected {len(states)} unique (state,version) pairs "
+              f"from {len(self.replay_buffer):,} raw samples")
 
-        states = []
-        policies = []
-        values = []
-        for (s, p, v) in self.replay_buffer:
-            states.append(s)  # 2D array: shape (board_size, board_size)
-            policies.append(p)  # policy vector, shape (action_size,)
-            values.append(v)  # scalar
-
-        print(f"Collected {len(states)} unique positions")
         states = np.array(states, dtype=np.float32)
         policies = np.array(policies, dtype=np.float32)
         values = np.array(values, dtype=np.float32).reshape(-1, 1)
@@ -210,18 +269,23 @@ class Trainer:
     def collect_self_play_games(self):
         """Run `num_self_play` games in parallel and extend
         `self.current_training_data`."""
-        ctx = get_context("forkserver")
-        state = self.best_policy.state_dict()
+        ctx = get_context("spawn")
+        time.sleep(1.0)
         base_seed = np.random.randint(1_000_000)
         # there is no need to clean this cache until we
         # find a new best model that does self-play
+        best_policy = (
+                        self.best_policy.__class__,
+                        self.best_policy.get_config(),
+                        self.best_policy.state_dict()
+                    )
         with ctx.Pool(self.args["num_workers"],
                       initializer=_worker_init,
                       initargs=(base_seed, ),
                       maxtasksperchild=100) as pool:
             # Prepare a tuple of arg‑tuples so we can stream them
             work_items = [(self.board_size, self.args,
-                           self.best_policy.state_dict(), self.shared_cache)
+                           best_policy, self.shared_cache)
                           for _ in range(self.args["num_self_play"])]
 
             # chunksize=1 → each worker returns as soon as it finishes
@@ -254,7 +318,7 @@ class Trainer:
 
         _, pred_v = self.policy(states)
         diff = pred_v - targets_v
-        return diff.mean().item(), (diff**2).mean().item()
+        return diff.mean().item()
     
     @torch.no_grad()
     def _probe_entropy(self, sample_size: int = 1024):
@@ -286,7 +350,7 @@ class Trainer:
         total_policy_loss = total_value_loss = total_entropy_loss = 0.0
         total_batches = 0
 
-        lambda_entropy = self.args.get("entropy_coef", 0.08)
+        lambda_entropy = self.args["entropy_coef"]
 
         for (state, target_policy, target_value) in self.dataloader:
             # predict
@@ -322,7 +386,7 @@ class Trainer:
         avg_entropy_loss     = total_entropy_loss     / total_batches 
         avg_total_loss = avg_policy_loss + avg_value_loss
 
-        val_bias, val_mse     = self._probe_value_bias()
+        val_bias     = self._probe_value_bias()
         H_net, H_target       = self._probe_entropy()
 
         self.metrics_history['policy_loss'].append(avg_policy_loss)
@@ -331,7 +395,6 @@ class Trainer:
 
         self.metrics_history.setdefault('avg_entropy', []).append(avg_entropy_loss)
         self.metrics_history.setdefault('value_bias',  []).append(val_bias)
-        self.metrics_history.setdefault('value_mse',   []).append(val_mse)
         self.metrics_history.setdefault('net_entropy', []).append(H_net)
         self.metrics_history.setdefault('mcts_entropy',[]).append(H_target)
 
@@ -339,7 +402,7 @@ class Trainer:
             f"Policy L={avg_policy_loss:.4f}  "
             f"Value L={avg_value_loss:.4f}  "
             f"H_bonus=×{avg_entropy_loss:.2f}  "
-            f"Δv={val_bias:+.3f}  MSE={val_mse:.3f}  "
+            f"Δv={val_bias:+.3f} "
             f"H_net={H_net:.2f}  H_mcts={H_target:.2f}"
         )
 
@@ -370,8 +433,16 @@ class Trainer:
         current_win_rate, best_win_rate = evaluate_models_parallel(
             self.board_size,
             self.args,
-            self.policy.state_dict(),
-            self.best_policy.state_dict(),
+            (
+                self.policy.__class__,
+                self.policy.get_config(),
+                self.policy.state_dict()
+            ),
+            (
+                self.best_policy.__class__,
+                self.best_policy.get_config(),
+                self.best_policy.state_dict()
+            ),
             n_matches=self.args['num_eval_matches'])
 
         print(
@@ -385,14 +456,23 @@ class Trainer:
         if current_win_rate - self.args['eval_win_margin'] > best_win_rate:
             print("Replacing best model with current model")
             self.best_policy = copy.deepcopy(self.policy)
+            self.model_version += 1 
             self.shared_cache.clear()
-            torch.save(self.best_policy, 'othello_policy_RL.pt')
+            torch.save(self.best_policy.state_dict(), 'othello_policy_RL_fast.pt')
 
             current_win_rate, best_win_rate = evaluate_models_parallel(
                 self.board_size,
                 self.args,
-                self.policy.state_dict(),
-                self.curr_benchmark_policy.state_dict() if self.curr_benchmark_policy is not None else None,
+                (
+                    self.policy.__class__,
+                    self.policy.get_config(),
+                    self.policy.state_dict()
+                ),
+                (
+                    self.curr_benchmark_policy.__class__,
+                    self.curr_benchmark_policy.get_config(),
+                    self.curr_benchmark_policy.state_dict()
+                ) if self.curr_benchmark_policy is not None else None,
                 n_matches=30)
             self.metrics_history['benchmark_win_rate'].append(current_win_rate)
             self.metrics_history['current_best_win_rate'].append(best_win_rate)
@@ -405,10 +485,10 @@ class Trainer:
                         "Promoting given benchmark net as benchmark and "
                         "increasing simulations to 400.")
                 self.curr_benchmark_policy = self.benchmark_policy
-                self.num_simulations = 400
-                self.args['num_simulations'] = 400
+                self.num_simulations = 300
+                self.args['num_simulations'] = 300
 
-                new_lr = 3e-4
+                new_lr = 2e-4
                 for pg in self.optimizer.param_groups:   # <‑‑ add these
                     pg['lr'] = new_lr                    #     three lines
                 self.args['lr'] = new_lr
@@ -418,25 +498,26 @@ class Trainer:
 if __name__ == '__main__':
     mcts_args = {
         'c_puct': 2.0,
-        'num_simulations': 100,
+        'num_simulations': 300,
         'dirichlet_alpha': 1.0,
         'dirichlet_epsilon': 0.3
     }
 
     train_args = {
-        'lr': 1e-3,
+        'lr': 5e-4,
         'weight_decay': 3e-6,
         'batch_size': 256,
         'mcts_temperature': 1.0,
         'num_exploratory_moves': 35,
         'num_iterations': 200,
-        'num_self_play': 100,
-        'replay_buffer_size': int(1e5),
+        'num_self_play': 300,
+        'replay_buffer_size': int(5e5),
         'train_steps_per_iter': 5000,
         'eval_win_margin': 0.1,
         'num_eval_matches': 50,
-        'num_epochs': 60,
-        "num_workers": os.cpu_count()
+        'num_epochs': 80,
+        "num_workers": os.cpu_count() - 1,
+        "entropy_coef": 0.005
     }
 
     train_args.update(mcts_args)
@@ -445,15 +526,26 @@ if __name__ == '__main__':
     # Extra action for "pass"
     action_size = board_size * board_size + 1
 
-    # policy = FastOthelloNet(board_size, action_size)
     # TODO: add both rollout and bencmark policy to the eval
-    # policy = torch.load("othello_policy_RL.pt")
-    bencnmark_policy = AlphaZeroNet(board_size, action_size, 10, 128)  # create model instance
-    bencnmark_policy.load_state_dict(torch.load('othello_policy_supervised_v7_best.pt'))
-    bencnmark_policy.eval()
+    # policy = AlphaZeroNet(board_size, action_size, 5, 128)
+    # policy.load_state_dict(torch.load('othello_policy_RL_state_dict.pt'))
+    # policy.eval()
+    policy = FastOthelloNet(board_size, action_size)
+    policy.load_state_dict(torch.load('othello_policy_RL_fast.pt'))
     
-    policy = AlphaZeroNet(board_size, action_size, 10, 128)
-    alphaZero = Trainer(board_size, train_args, policy, bencnmark_policy)
+    
+    bencnmark_policy = AlphaZeroNet(board_size, action_size, 5, 128)  # create model instance
+    bencnmark_policy.load_state_dict(torch.load('othello_policy_supervised_v3_state_dict.pt'))
+    bencnmark_policy.eval()
+
+    self_play_policy = FastOthelloNet(board_size, action_size)
+    self_play_policy.load_state_dict(torch.load('othello_policy_RL_entropy_fastnet_state_dict.pt'))
+    self_play_policy.eval()
+    
+    alphaZero = Trainer(board_size, train_args, policy,
+                        self_play_policy=self_play_policy,
+                        benchmark_policy=bencnmark_policy)
+    alphaZero.curr_benchmark_policy = alphaZero.benchmark_policy
     alphaZero.train()
 
     # current_win_rate, best_win_rate = evaluate_models_parallel(

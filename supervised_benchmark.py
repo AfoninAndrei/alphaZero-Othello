@@ -14,7 +14,6 @@ from envs.othello import get_random_symmetry
 
 # dataset is taken from: https://github.com/dimitri-rusin/othello/tree/main
 
-# TODO: Augmentations help a lot to not overfit too early. does it make sense to train for the early moves?
 BOARD_SIZE = 8
 
 
