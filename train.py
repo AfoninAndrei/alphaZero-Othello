@@ -22,85 +22,6 @@ from self_play_worker import one_self_play
 from Models import FastOthelloNet, AlphaZeroNet
 from envs.othello import get_random_symmetry
 
-# TODO: Clean the code, add typing, add dosctring
-
-# TODO: why can't we beat the rollout 100% consistently?
-# model is too weak? target is too noisy?
-# probably since we still cannot beat the supervised model
-# we need to adapt the noiseness of the gt
-
-# TODO: add eval for 2 actors: benchmark and rollout,
-# bencmark comes after we start to beat the shit out ouf rollout
-# TODO: increase number of simulations during the eval to 400
-
-# TODO: λ-return bootstrapping  as a target
-# let's check how noisy the target is. Compare it to supervised
-# Clear right-hand tail peaking at variance ≈ 1.0
-# ➤ There are many positions (dozens!) that were visited multiple times
-# but received totally contradictory labels — i.e.,
-# the exact same board state ended in both a win and a loss.
-# These contradictory labels show your value function is being trained on maximally noisy signals.
-# If your MCTS is shallow (e.g., 100 sims), it might frequently pick different suboptimal lines
-# from the same state — hence same board → different outcome → variance = 1.0.
-# But if the search is deeper (e.g., 800 sims), it may consistently pick the best move in
-# that position → repeat play yields the same result → lower variance.
-# if the variance histogram doesn't change...
-# That would suggest:
-# Your MCTS is already deep enough to saturate its impact
-# Or that the policy prior is too weak, so MCTS can't recover
-# Or that exploration noise (Dirichlet, temperature, etc.) is dominating play
-# *the deeper search does not help (100->400sim)
-
-# I noticed that the model does not converge anymore after some point: it cannot
-# beat rollout policy constantly. I took this model and did a play against a supervised
-# model and plotted value function through the steps of the game, once can see there that
-# only after 30 moves its value function starts to correlate with the real value function
-# if you increase number of MCTS simulations, then we could reduce this nubmer to 20 steps.
-# This basically says that model is unreliable at the beginning of the game. But there is a room
-# for improvement, be checking the target that we train value function for we can observe if
-# this target is confusing or not. We check the variance and see that for the current trained model
-# self-play still produces states that are contraversial with 70% of states in the training having this
-# behaviour. In the same time 0 temperature and no Dirichlet noise gives ~35% states being contraversial, hence it make sense to
-# try the strategy similar to AlphaZero with a few initial steps have temperature 1 to keep exploration,
-# and then switch it to 0. By running the same experiment with 8 steps we get 45% unique states having
-# value variance. So, it probably makes sense to try this strategy.
-
-# With mcts_temperature = 1.0 for the entire game the root visit count is usually flat (πᵢ ≈ 1/|A|).
-# The cross‑entropy target the policy head sees is therefore almost random, so the network
-# learns to imitate exploration noise instead of the best move.
-# That explains
-# policy loss stuck ≈ 0.8 (only a little better than uniform ≈ ln |A|)
-# large variance in the value head (conflicting returns for the same canonical state)
-
-# TODO: to get the most out of the collected data
-# and utilize the GPU more since it is not a bottleneck
-# (training time ~12sec, data collection ~80sec) we can
-# add augmentations to the training and increase number of epochs
-# we also remove repeating states to focus more on the interesting states during training
-# but not on the initial non-relevant moves.
-
-# TODO: elaborate on the policy collapse, if the exploration is too low during self-play,
-# then the policy learns to beat the current policy only on the narrow set of states
-# then during the evaluation we again test it against greedy policy and we know
-# how to beat it, so we promote the policy, but then this policy would lose to the 
-# policy few iterations ago.
-
-# TODO: try as a learning target to use q + z, instead of z
-# this should help to reduce the noise, also if we have duplicating data after data collection
-# maybe it makes sense to filter it? Also maybe it makes sense to construct td-lambda target?
-
-# TODO: add to the blog explanation on why we choose 100 simulations in the tree
-# it feels like starting from this number we have good estimation of the win
-# variance is lower
-
-# Gating: Only accept a new network if it beats the previous one ≥ 55 %. Stops drifting into bad local minima.
-
-# Speed up story: Probably makes sense to remeasure everything
-# 1. multiprocessing for self-play ~4x self-play speed up
-# 2. multiprocessing for the evaluation ~4x eval speed up
-# 3. Training on the mps ~2x speed up
-# 4. Faster othello env ~25% speed up
-
 
 class RandomSymmetryDataset(Dataset):
 
@@ -120,24 +41,15 @@ class RandomSymmetryDataset(Dataset):
                 torch.from_numpy(np.ascontiguousarray(p)),
                 torch.as_tensor(v, dtype=torch.float32))
 
-# TODO: during inference we need to explore more with less
-# peaked probabillity, opponent should not surpise us! 
-# if your policy is very peaked even increasing the number
-# of simulations cannot help to recover strong strategies
-    
-# TODO: during inference: shall we search with UCT, but choose
-# the move based on value accumulated, not visit counter
-    
-# TODO: I notices rock-paper-scissors situation when we promote
-# the model, model is not robust and during MCTS it does not search
-# other possibilities, by introducing entropy we make model more robust
-# to newer strategies and this situation seems to be at least reduced
 
-# TODO: Monitor average exploration depth in the tree seems like an
-# interesting metric 
 class Trainer:
 
-    def __init__(self, board_size, args, policy, self_play_policy=None, benchmark_policy=None):
+    def __init__(self,
+                 board_size,
+                 args,
+                 policy,
+                 self_play_policy=None,
+                 benchmark_policy=None):
         self.board_size = board_size
         self.args = args
         self.policy = policy
@@ -145,8 +57,9 @@ class Trainer:
         self.curr_benchmark_policy = None
         self.num_simulations = self.args['num_simulations']
 
-        self.train_device = torch.device("mps" if torch.backends.mps.is_available() 
-                                         else "cuda" if torch.cuda.is_available() else "cpu")
+        self.train_device = torch.device(
+            "mps" if torch.backends.mps.is_available(
+            ) else "cuda" if torch.cuda.is_available() else "cpu")
         # important to copy, otherwise we update both models during training
         if self_play_policy is None:
             self.best_policy = copy.deepcopy(self.policy).eval()
@@ -155,16 +68,18 @@ class Trainer:
         self.model_version = 0
 
         self.value_loss = nn.MSELoss()
-        self.optimizer = torch.optim.Adam(
-            self.policy.parameters(),
-            lr=self.args['lr'],
-            weight_decay=self.args['weight_decay'])
+        self.optimizer = torch.optim.Adam(self.policy.parameters(),
+                                          lr=self.args.get('lr', 1e-3),
+                                          weight_decay=self.args.get(
+                                              'weight_decay', 3e-6))
 
         self.dataloader = None
         buf_size = self.args.get("replay_buffer_size", 500000)
-        self.buffer_path = "replay_buffer.pkl"
-        self.replay_buffer: Deque[Tuple[np.ndarray, np.ndarray,
-                                        float]] = deque(maxlen=buf_size)
+        self.buffer_path = self.args.get('replay_buffer_path', None)
+        self.replay_buffer: Deque[Tuple[np.ndarray, np.ndarray, float,
+                                        int]] = deque(maxlen=buf_size)
+        # this should update the model version
+        self._load_replay_buffer()
 
         self.metrics_history = {
             'policy_loss': [],
@@ -185,16 +100,20 @@ class Trainer:
     def _hash_state(self, board: np.ndarray) -> str:
         """Fast, order-preserving hash for an int8 board."""
         return hashlib.sha1(board.astype(np.int8).tobytes()).hexdigest()
-    
+
     def _save_replay_buffer(self) -> None:
         """Pickle the *entire* replay_buffer to disk (atomic write)."""
         tmp_path = self.buffer_path + ".tmp"
         with open(tmp_path, "wb") as f:
-            pickle.dump(self.replay_buffer, f, protocol=pickle.HIGHEST_PROTOCOL)
+            pickle.dump(self.replay_buffer,
+                        f,
+                        protocol=pickle.HIGHEST_PROTOCOL)
         os.replace(tmp_path, self.buffer_path)
-    
+
     def _load_replay_buffer(self) -> None:
         """Populate self.replay_buffer from an existing pickle file."""
+        if not self.buffer_path:
+            return
         try:
             with open(self.buffer_path, "rb") as f:
                 loaded = pickle.load(f)
@@ -203,21 +122,25 @@ class Trainer:
             self.replay_buffer.extend(loaded)
             print(f"Loaded {len(self.replay_buffer):,} samples from "
                   f"'{self.buffer_path}'")
+
+            versions = [
+                traj[3] for traj in self.replay_buffer
+                if isinstance(traj, (tuple, list)) and len(traj) >= 4
+            ]
+            self.model_version = max(versions, default=0)
+            print(f"Latest model version is {self.model_version}")
         except Exception as err:
-            print(f"⚠️  Could not load replay buffer ({err!s}); starting fresh.")
-    
+            print(
+                f"⚠️  Could not load replay buffer ({err!s}); starting fresh.")
+
     def _extend_buffer(
-            self,
-            new_trajs: List[Tuple[np.ndarray, np.ndarray, float]]) -> None:
+            self, new_trajs: List[Tuple[np.ndarray, np.ndarray,
+                                        float]]) -> None:
         ver = self.model_version
         self.replay_buffer.extend((s, p, v, ver) for (s, p, v) in new_trajs)
 
-        self._save_replay_buffer()
-    
-    def _aggregate_duplicates(self
-                              ) -> Tuple[List[np.ndarray],
-                                         List[np.ndarray],
-                                         List[float]]:
+    def _aggregate_duplicates(
+            self) -> Tuple[List[np.ndarray], List[np.ndarray], List[float]]:
         """
         Collapse duplicates that stem from the *same* model version.
         Returns three aligned Python lists (states, avg-pi, avg-v).
@@ -235,14 +158,14 @@ class Trainer:
             else:
                 b = buckets[key]
                 b["sum_pi"] += pi
-                b["sum_v"]  += v
-                b["count"]  += 1
+                b["sum_v"] += v
+                b["count"] += 1
 
         states, policies, values = [], [], []
         for b in buckets.values():
             cnt = b["count"]
-            avg_pi = b["sum_pi"] / cnt          # arithmetic mean of dists
-            avg_pi /= avg_pi.sum() + 1e-12          # re-normalise, safe
+            avg_pi = b["sum_pi"] / cnt  # arithmetic mean of dists
+            avg_pi /= avg_pi.sum() + 1e-12  # re-normalise, safe
             v = b["sum_v"] / cnt
             states.append(b["state"])
             policies.append(avg_pi.astype(np.float32))
@@ -253,7 +176,7 @@ class Trainer:
         """
         Convert self.current_training_data (list of (state, policy, value))
         into a PyTorch DataLoader for training.
-        """        
+        """
         states, policies, values = self._aggregate_duplicates()
         print(f"Collected {len(states)} unique (state,version) pairs "
               f"from {len(self.replay_buffer):,} raw samples")
@@ -264,7 +187,14 @@ class Trainer:
         dataset = RandomSymmetryDataset(states, policies, values)
         self.dataloader = DataLoader(dataset,
                                      batch_size=self.args['batch_size'],
+                                     num_workers=self.args['num_workers'],
                                      shuffle=True)
+
+        self.probe_loader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=self.args['batch_size'],
+            shuffle=True,
+            num_workers=0)
 
     def collect_self_play_games(self):
         """Run `num_self_play` games in parallel and extend
@@ -274,18 +204,16 @@ class Trainer:
         base_seed = np.random.randint(1_000_000)
         # there is no need to clean this cache until we
         # find a new best model that does self-play
-        best_policy = (
-                        self.best_policy.__class__,
-                        self.best_policy.get_config(),
-                        self.best_policy.state_dict()
-                    )
+        best_policy = (self.best_policy.__class__,
+                       self.best_policy.get_config(),
+                       self.best_policy.state_dict())
         with ctx.Pool(self.args["num_workers"],
                       initializer=_worker_init,
                       initargs=(base_seed, ),
                       maxtasksperchild=100) as pool:
             # Prepare a tuple of arg‑tuples so we can stream them
-            work_items = [(self.board_size, self.args,
-                           best_policy, self.shared_cache)
+            work_items = [(self.board_size, self.args, best_policy,
+                           self.shared_cache)
                           for _ in range(self.args["num_self_play"])]
 
             # chunksize=1 → each worker returns as soon as it finishes
@@ -294,8 +222,10 @@ class Trainer:
                                             chunksize=1):
                 self._extend_buffer(traj)
 
+        self._save_replay_buffer()
+
     @torch.no_grad()
-    def _probe_value_bias(self, sample_size: int = 1024):
+    def _probe_value_bias(self):
         """
         1. Randomly pick `sample_size` indices from the *same* Dataset
         (`self.dataloader.dataset`).
@@ -303,45 +233,29 @@ class Trainer:
         random‑symmetry augmentation.
         3. Return mean bias and MSE of the value head.
         """
-        ds = self.dataloader.dataset
-        idxs = random.sample(range(len(ds)), k=min(sample_size, len(ds)))
-
-        states, targets_v = [], []
-        for i in idxs:
-            s, _, v = ds[i]  # ds[i] already returns tensors
-            states.append(s)
-            targets_v.append(v)
-
-        states = torch.stack(states, 0).to(self.train_device)
-        targets_v = torch.stack(targets_v,
-                                0).to(self.train_device)
+        states, _, targets_v = next(iter(self.probe_loader))
+        states = states.to(self.train_device)
+        targets_v = targets_v.to(self.train_device)
 
         _, pred_v = self.policy(states)
         diff = pred_v - targets_v
         return diff.mean().item()
-    
+
     @torch.no_grad()
-    def _probe_entropy(self, sample_size: int = 1024):
+    def _probe_entropy(self):
         """
         Random mini‑batch → net‑policy entropy  +  MCTS‑target entropy.
         """
-        ds = self.dataloader.dataset
-        idxs = random.sample(range(len(ds)), k=min(sample_size, len(ds)))
-
-        states, target_pi = [], []
-        for i in idxs:
-            s, π̂, _ = ds[i]
-            states.append(s)
-            target_pi.append(π̂)
-
-        states    = torch.stack(states, 0).to(self.train_device)
-        target_pi = torch.stack(target_pi, 0).to(self.train_device)
+        states, target_pi, _ = next(iter(self.probe_loader))
+        states = states.to(self.train_device)
+        target_pi = target_pi.to(self.train_device)
 
         logits, _ = self.policy(states)
-        p_net     = torch.softmax(logits, dim=-1)
+        p_net = torch.softmax(logits, dim=-1)
 
-        H_net = -(p_net     * torch.log(p_net + 1e-12)).sum(dim=-1).mean().item()
-        H_tgt = -(target_pi * torch.log(target_pi + 1e-12)).sum(dim=-1).mean().item()
+        H_net = -(p_net * torch.log(p_net + 1e-12)).sum(dim=-1).mean().item()
+        H_tgt = -(target_pi *
+                  torch.log(target_pi + 1e-12)).sum(dim=-1).mean().item()
         return H_net, H_tgt
 
     def train_iters(self):
@@ -363,13 +277,13 @@ class Trainer:
             log_probs = F.log_softmax(policy_logits, dim=-1)
             policy_loss = -torch.mean(
                 torch.sum(target_policy * log_probs, dim=-1))
-            probs       = torch.softmax(policy_logits, dim=-1)
-            entropy     = torch.mean(torch.sum(-probs * log_probs, dim=-1))  # H(π)
-            entropy_loss= -lambda_entropy * entropy                                # <‑‑ new
+            probs = torch.softmax(policy_logits, dim=-1)
+            entropy = torch.mean(torch.sum(-probs * log_probs, dim=-1))  # H(π)
+            entropy_loss = -lambda_entropy * entropy  # <‑‑ new
             # compute value loss
             value_loss = self.value_loss(value, target_value)
 
-            loss = policy_loss + value_loss + entropy_loss  
+            loss = policy_loss + value_loss + entropy_loss
 
             self.optimizer.zero_grad()
             loss.backward()
@@ -378,33 +292,32 @@ class Trainer:
 
             total_policy_loss += policy_loss.cpu().item()
             total_value_loss += value_loss.cpu().item()
-            total_entropy_loss     += -entropy_loss.detach().cpu().item()
+            total_entropy_loss += -entropy_loss.detach().cpu().item()
             total_batches += 1
 
         avg_policy_loss = total_policy_loss / total_batches
         avg_value_loss = total_value_loss / total_batches
-        avg_entropy_loss     = total_entropy_loss     / total_batches 
+        avg_entropy_loss = total_entropy_loss / total_batches
         avg_total_loss = avg_policy_loss + avg_value_loss
 
-        val_bias     = self._probe_value_bias()
-        H_net, H_target       = self._probe_entropy()
+        val_bias = self._probe_value_bias()
+        H_net, H_target = self._probe_entropy()
 
         self.metrics_history['policy_loss'].append(avg_policy_loss)
         self.metrics_history['value_loss'].append(avg_value_loss)
         self.metrics_history['total_loss'].append(avg_total_loss)
 
-        self.metrics_history.setdefault('avg_entropy', []).append(avg_entropy_loss)
-        self.metrics_history.setdefault('value_bias',  []).append(val_bias)
+        self.metrics_history.setdefault('avg_entropy',
+                                        []).append(avg_entropy_loss)
+        self.metrics_history.setdefault('value_bias', []).append(val_bias)
         self.metrics_history.setdefault('net_entropy', []).append(H_net)
-        self.metrics_history.setdefault('mcts_entropy',[]).append(H_target)
+        self.metrics_history.setdefault('mcts_entropy', []).append(H_target)
 
-        print(
-            f"Policy L={avg_policy_loss:.4f}  "
-            f"Value L={avg_value_loss:.4f}  "
-            f"H_bonus=×{avg_entropy_loss:.2f}  "
-            f"Δv={val_bias:+.3f} "
-            f"H_net={H_net:.2f}  H_mcts={H_target:.2f}"
-        )
+        print(f"Policy L={avg_policy_loss:.4f}  "
+              f"Value L={avg_value_loss:.4f}  "
+              f"H_bonus=×{avg_entropy_loss:.2f}  "
+              f"Δv={val_bias:+.3f} "
+              f"H_net={H_net:.2f}  H_mcts={H_target:.2f}")
 
     def train(self):
         for _ in range(self.args['num_iterations']):
@@ -415,7 +328,6 @@ class Trainer:
 
             print("Collection Time taken", time.time() - start_time)
 
-            # train
             self.setup_dataloader()
 
             start_time = time.time()
@@ -432,17 +344,10 @@ class Trainer:
         self.policy.eval()
         current_win_rate, best_win_rate = evaluate_models_parallel(
             self.board_size,
-            self.args,
-            (
-                self.policy.__class__,
-                self.policy.get_config(),
-                self.policy.state_dict()
-            ),
-            (
-                self.best_policy.__class__,
-                self.best_policy.get_config(),
-                self.best_policy.state_dict()
-            ),
+            self.args, (self.policy.__class__, self.policy.get_config(),
+                        self.policy.state_dict()),
+            (self.best_policy.__class__, self.best_policy.get_config(),
+             self.best_policy.state_dict()),
             n_matches=self.args['num_eval_matches'])
 
         print(
@@ -456,23 +361,19 @@ class Trainer:
         if current_win_rate - self.args['eval_win_margin'] > best_win_rate:
             print("Replacing best model with current model")
             self.best_policy = copy.deepcopy(self.policy)
-            self.model_version += 1 
+            self.model_version += 1
             self.shared_cache.clear()
-            torch.save(self.best_policy.state_dict(), 'othello_policy_RL_fast.pt')
+            torch.save(self.best_policy.state_dict(),
+                       'othello_policy_RL_intermediate.pt')
 
             current_win_rate, best_win_rate = evaluate_models_parallel(
                 self.board_size,
-                self.args,
-                (
-                    self.policy.__class__,
-                    self.policy.get_config(),
-                    self.policy.state_dict()
-                ),
-                (
-                    self.curr_benchmark_policy.__class__,
-                    self.curr_benchmark_policy.get_config(),
-                    self.curr_benchmark_policy.state_dict()
-                ) if self.curr_benchmark_policy is not None else None,
+                self.args, (self.policy.__class__, self.policy.get_config(),
+                            self.policy.state_dict()),
+                (self.curr_benchmark_policy.__class__,
+                 self.curr_benchmark_policy.get_config(),
+                 self.curr_benchmark_policy.state_dict())
+                if self.curr_benchmark_policy is not None else None,
                 n_matches=30)
             self.metrics_history['benchmark_win_rate'].append(current_win_rate)
             self.metrics_history['current_best_win_rate'].append(best_win_rate)
@@ -482,17 +383,16 @@ class Trainer:
 
             if self.curr_benchmark_policy is None and current_win_rate > 0.9:
                 print("🎉  Rollout beaten (>90 %). "
-                        "Promoting given benchmark net as benchmark and "
-                        "increasing simulations to 400.")
+                      "Promoting given benchmark net as benchmark and "
+                      "increasing simulations to 400.")
                 self.curr_benchmark_policy = self.benchmark_policy
                 self.num_simulations = 300
                 self.args['num_simulations'] = 300
 
                 new_lr = 2e-4
-                for pg in self.optimizer.param_groups:   # <‑‑ add these
-                    pg['lr'] = new_lr                    #     three lines
+                for pg in self.optimizer.param_groups:
+                    pg['lr'] = new_lr
                 self.args['lr'] = new_lr
-
 
 
 if __name__ == '__main__':
@@ -511,13 +411,15 @@ if __name__ == '__main__':
         'num_exploratory_moves': 35,
         'num_iterations': 200,
         'num_self_play': 300,
-        'replay_buffer_size': int(5e5),
+        'replay_buffer_size': int(1e6),
+        'replay_buffer_path': 'replay_buffer_old.pkl',
         'train_steps_per_iter': 5000,
         'eval_win_margin': 0.1,
         'num_eval_matches': 50,
         'num_epochs': 80,
-        "num_workers": os.cpu_count() - 1,
-        "entropy_coef": 0.005
+        'num_workers': os.cpu_count(),
+        'entropy_coef': 0.01,
+        'lambda': 0.98
     }
 
     train_args.update(mcts_args)
@@ -526,93 +428,21 @@ if __name__ == '__main__':
     # Extra action for "pass"
     action_size = board_size * board_size + 1
 
-    # TODO: add both rollout and bencmark policy to the eval
-    # policy = AlphaZeroNet(board_size, action_size, 5, 128)
-    # policy.load_state_dict(torch.load('othello_policy_RL_state_dict.pt'))
-    # policy.eval()
-    policy = FastOthelloNet(board_size, action_size)
-    policy.load_state_dict(torch.load('othello_policy_RL_fast.pt'))
-    
-    
-    bencnmark_policy = AlphaZeroNet(board_size, action_size, 5, 128)  # create model instance
-    bencnmark_policy.load_state_dict(torch.load('othello_policy_supervised_v3_state_dict.pt'))
+    policy = AlphaZeroNet(board_size, action_size, 5, 128)
+    bencnmark_policy = AlphaZeroNet(board_size, action_size, 5,
+                                    128)  # create model instance
+    bencnmark_policy.load_state_dict(
+        torch.load('othello_policy_supervised_big.pt'))
     bencnmark_policy.eval()
 
     self_play_policy = FastOthelloNet(board_size, action_size)
-    self_play_policy.load_state_dict(torch.load('othello_policy_RL_entropy_fastnet_state_dict.pt'))
+    self_play_policy.load_state_dict(torch.load('othello_policy_RL_small.pt'))
     self_play_policy.eval()
-    
-    alphaZero = Trainer(board_size, train_args, policy,
+
+    alphaZero = Trainer(board_size,
+                        train_args,
+                        policy,
                         self_play_policy=self_play_policy,
                         benchmark_policy=bencnmark_policy)
     alphaZero.curr_benchmark_policy = alphaZero.benchmark_policy
     alphaZero.train()
-
-    # current_win_rate, best_win_rate = evaluate_models_parallel(
-    #     board_size,
-    #     train_args,
-    #     bencnmark_policy.state_dict(),
-    #     None,
-    #     n_matches=150)
-    # print(
-    #     f"Eval against bencmark: Win Rate Current {current_win_rate*100:.1f}% vs Win rate Benchmark: {best_win_rate*100:.1f}%"
-    # )
-
-    # alphaZero.collect_self_play_games()
-    # raw = alphaZero.current_training_data
-    # print(
-    #     f"Collected {len(raw):,} positions from {train_args['num_self_play']} games"
-    # )
-
-    # import pickle, pathlib, hashlib
-    # import pandas as pd
-
-    # suffix = f"{train_args['num_self_play']}self-play_{train_args['num_simulations']}sim_lambda9"
-    # out_dir = pathlib.Path("diagnostics")
-    # out_dir.mkdir(exist_ok=True)
-    # with open(out_dir / f"training_set_{suffix}.pkl", "wb") as f:
-    #     pickle.dump(raw, f)
-
-    # def hash_state(board: np.ndarray) -> str:
-    #     """Fast, order-preserving hash for an 8×8 int8 board."""
-    #     return hashlib.sha1(board.tobytes()).hexdigest()
-
-    # buckets = {}
-    # for s, _π, v in raw:
-    #     h = hash_state(s.astype(np.int8))
-    #     buckets.setdefault(h, []).append(float(v))
-
-    # stats = []
-    # for h, vals in buckets.items():
-    #     vals = np.array(vals, dtype=np.float32)
-    #     stats.append({
-    #         "hash": h,
-    #         "count": len(vals),
-    #         "mean_v": vals.mean(),
-    #         "var_v": vals.var(ddof=0)
-    #     })
-    # df = pd.DataFrame(stats)
-    # df.to_csv(out_dir / f"value_stats_{suffix}.csv", index=False)
-    # df = pd.read_csv(out_dir / f"value_stats_{suffix}.csv")
-    # df = df[df["count"] > 1].copy()
-
-    # import matplotlib.pyplot as plt
-    # plt.figure()
-    # plt.hist(df["var_v"], bins=50, log=True)
-    # plt.xlabel("Variance of value target per unique state")
-    # plt.ylabel("Frequency (log scale)")
-    # plt.title(
-    #     f"Noise level of value targets after {train_args['num_self_play']} self-play games"
-    # )
-    # plt.tight_layout()
-    # plt.savefig(out_dir / f"value_variance_hist_{suffix}.png", dpi=150)
-
-    # noisiest = df.sort_values(by=["var_v", "count"],
-    #                           ascending=[False, False]).head(10)
-    # print("\nTop-10 noisiest positions:")
-    # print(noisiest[["count", "mean_v", "var_v"]])
-
-    # high_var_pct = (df["var_v"] > 0.0).mean() * 100
-    # print(
-    #     f"Fraction of positions with value variance > 0.0: {high_var_pct:.2f}%"
-    # )
