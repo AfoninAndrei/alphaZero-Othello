@@ -9,6 +9,9 @@ import re
 import os, sys, queue, subprocess, threading, time, random
 from pathlib import Path
 
+import re, queue, subprocess, threading, time
+from pathlib import Path
+
 import numpy as np
 import torch
 
@@ -17,11 +20,19 @@ from envs.othello import OthelloGameNew as OthelloGame
 from Models import FastOthelloNet, AlphaZeroNet
 # model 15 is best so far
 # ────────── paths & parameters you may want to change ────────── #
-ENGINE_PATH = Path(
-    "/Users/andreiafonin/Downloads/Egaroucid/bin/Egaroucid_for_Console.out")
 
-MODEL_PATH = "othello_policy_RL_big_best_cluster15.pt"
-# MODEL_PATH = "othello_policy_RL_fast_best_cluster7.pt"
+from pathlib import Path
+
+HOME = Path.home()
+
+ENGINE_PATH = Path(f"{HOME}/Downloads/Egaroucid/bin/Egaroucid_for_Console.out")
+
+USE_BIG_MODEL = True
+if USE_BIG_MODEL:
+    MODEL_PATH = 'othello_policy_RL_big.pt'
+else:
+    MODEL_PATH = 'othello_policy_RL_small.pt'
+
 ENGINE_CWD = ENGINE_PATH.parent  # ← contains resources/ as sub-dir
 ENGINE_LEVEL = 10  # 1 = fast … 60 = strong
 N_GAMES = 50
@@ -47,15 +58,6 @@ def sq2a(s, n=8):
 
 # ──────────────── tiny NBoard wrapper (prompt fix) ──────────────
 MOVE_PAT = re.compile(r"\b([a-h][1-8]|pass)\b", re.I)
-
-import re, queue, subprocess, threading, time
-from pathlib import Path
-
-# ---------- customise these two paths once ----------
-ENGINE_PATH = Path(
-    "/Users/andreiafonin/Downloads/Egaroucid/bin/Egaroucid_for_Console.out")
-ENGINE_CWD = ENGINE_PATH.parent  # ← contains *resources/* sub-dir
-# -----------------------------------------------------
 TIMEOUT = 10  # seconds to wait for any reply
 MOVE_RX = re.compile(r"\b([a-h][1-8]|pass)\b", re.I)
 MOVE_TABLE_RX = re.compile(
@@ -179,8 +181,11 @@ class NBEngine:
 
 # ───────────── convenience wrappers for your MCTS agent ─────────
 def new_mcts(env):
-    # net = FastOthelloNet(env.n, env.action_size)
-    net = AlphaZeroNet(env.n, env.action_size, 5, 128)  # create model instance
+    if USE_BIG_MODEL:
+        net = AlphaZeroNet(env.n, env.action_size, 5,
+                           128)  # create model instance
+    else:
+        net = FastOthelloNet(env.n, env.action_size)
     net.load_state_dict(torch.load(MODEL_PATH, map_location="cpu"))
     net.eval()
     return MCTS(env, {
