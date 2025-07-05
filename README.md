@@ -31,6 +31,42 @@ python play_othello.py --no-big-model --bot-player -1
 
 ---
 
+## 🐳 Play in Docker (no local setup)
+
+```bash
+# pull the pre-built image
+docker pull ghcr.io/afoninandrei/alphazero-othello:latest
+```
+
+### 🖥 macOS users: Set up XQuartz for GUI support
+
+To show the Pygame window when running in Docker:
+
+```bash
+# 1. Install XQuartz (only once)
+brew install --cask xquartz
+
+# 2. Start XQuartz manually
+open -a XQuartz
+
+# 3. Enable network clients
+# Go to: XQuartz > Preferences > Security
+# Enable: ✅ "Allow connections from network clients"
+
+# 4. Allow local connections (in terminal)
+/opt/X11/bin/xhost +localhost
+```
+
+### ▶️ Run the game with UI
+
+```bash
+docker run --rm -it \
+  -e DISPLAY=host.docker.internal:0 \
+  ghcr.io/afoninandrei/alphazero-othello:latest \
+  python play_othello.py --big-model --bot-player -1
+```
+---
+
 ## 📦 Datasets
 
 The following datasets were used to train the AlphaZero and FastOthello models:
@@ -52,8 +88,6 @@ To extract:
 ```bash
 tar -xzvf othello_replay_big_model.tar.gz
 ```
-
----
 
 ### 🧑‍🏫 Supervised Learning Dataset
 
