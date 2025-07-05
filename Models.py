@@ -20,20 +20,10 @@ class Inference:
         board_input = board_input.to(device)
         # Evaluate
         self.eval()
-        # TODO: similar to LeelaZero?
-        # temperature = 1.2
         with torch.no_grad():
             policy_logits, value = self(board_input)
             policy = self.softmax(policy_logits)
 
-            # if temperature == 0.0:
-            #     # Return deterministic policy (argmax)
-            #     policy = torch.zeros_like(policy_logits)
-            #     policy[0, torch.argmax(policy_logits, dim=1)] = 1.0
-            # else:
-            #     # Apply temperature scaling before softmax
-            #     scaled_logits = policy_logits / temperature
-            #     policy = self.softmax(scaled_logits)
         # Convert to numpy
         policy = policy[0].cpu().numpy()
         value = value[0, 0].cpu().numpy().item()  # scalar

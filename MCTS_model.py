@@ -12,6 +12,37 @@ EPS = 1e-8
 VIRTUAL_LOSS = 1.0
 
 
+def random_symmetry(state: np.ndarray):
+    """
+    Pick one of the 8 elements of D₄ (four rotations × optional mirror).
+    Return the transformed board together with (k, flip) so that we
+    can undo the transform again.
+    """
+    k = np.random.randint(4)  # 0,1,2,3 quarter-turns anticlockwise
+    flip = bool(np.random.randint(2))  # mirror left–right?
+
+    s = np.rot90(state, k, axes=(-2, -1))
+    if flip:
+        s = np.flip(s, axis=-1)  # fliplr keeps channel dim unchanged
+
+    return s, k, flip
+
+
+def unsymmetrise_pi(pi_sym: np.ndarray, k: int, flip: bool, n: int):
+    """
+    Undo the symmetry for a (n*n+1,) policy vector.
+    The last element (‘pass’/‘resign’) is left untouched.
+    """
+    pb = pi_sym[:-1].reshape(n, n)
+
+    # inverse operations in reverse order
+    if flip:
+        pb = np.flip(pb, axis=-1)
+    pb = np.rot90(pb, -k)  # -k = inverse rotation
+
+    return np.concatenate([pb.ravel(), pi_sym[-1:]])
+
+
 class Node:
 
     __slots__ = (
@@ -144,6 +175,7 @@ class MCTS:
                  env,
                  args,
                  policy,
+                 apply_symmetry=False,
                  dirichlet_alpha=0.03,
                  dirichlet_epsilon=0.0,
                  inference_cache=None):
@@ -152,6 +184,7 @@ class MCTS:
         self.policy = policy
         self.use_rollout = False
         self.num_actions = self.env.action_size
+        self.apply_symmetry = apply_symmetry
         self.dirichlet_alpha = dirichlet_alpha
         self.dirichlet_epsilon = dirichlet_epsilon
         # we need policy if not rollout
@@ -214,15 +247,6 @@ class MCTS:
             counts[action] = child_node.visit_count
 
         if abs(temp) < 1e-1:
-            # Choose the action(s) with the highest visit_count
-            # COUNT_NUMBER = 70
-            # if np.any(counts > COUNT_NUMBER):
-            #     best_value = float('inf')
-            #     for action, child_node in self.root.children.items():
-            #         if child_node.visit_count > COUNT_NUMBER and child_node.value < best_value:
-            #             best_action = action
-            #             best_value = child_node.value
-            # else:
             best_actions = np.where(counts == counts.max())[0]
             best_action = np.random.choice(best_actions)
             probs = np.zeros_like(counts)
@@ -286,8 +310,16 @@ class MCTS:
         if key in self.inference_cache:
             return self.inference_cache[key]
 
-        self.inference_cache[key] = self.policy.inference(
-            leaf.state, leaf.player)
+        if self.apply_symmetry:
+            sym_state, k, flip = random_symmetry(leaf.state)
+            priors_sym, value = self.policy.inference(sym_state, leaf.player)
+
+            n = self.env.board_size
+            priors = unsymmetrise_pi(priors_sym, k, flip, n)
+        else:
+            priors, value = self.policy.inference(leaf.state, leaf.player)
+
+        self.inference_cache[key] = (priors, value)
         return self.inference_cache[key]
 
     def _expand_and_evaluate(self, leaf: Node):

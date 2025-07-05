@@ -4,15 +4,8 @@ import numpy as np
 from MCTS_model import MCTS
 from envs.othello import OthelloGameNew as OthelloGame
 
-# def get_training_data(trajectory, winning_player):
-#     for i, (st, pol, ply, value) in enumerate(trajectory):
-#         outcome = 1 if ply == winning_player else (
-#             -1 if winning_player != 0 else 0)
-#         trajectory[i] = (st, pol, outcome)
-#     return trajectory
 
-
-def get_training_data(trajectory, winning_player, lambd: float = 0.9):
+def get_training_data(trajectory, winning_player, lambd: float = 1.0):
 
     def z_for(p):
         if winning_player == 0:  # draw
@@ -89,6 +82,7 @@ def one_self_play(args_tuple):
                 env.get_opponent(player) if reward < 0 else 0)
 
             # back‑propagate the game outcome into the stored positions
-            return get_training_data(trajectory, winning_player)
+            return get_training_data(trajectory, winning_player,
+                                     args["lambda"])
 
         player = env.get_opponent(player)
