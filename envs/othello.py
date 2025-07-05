@@ -333,6 +333,7 @@ class OthelloGameNew(Game):
     def state_size(self):  # noqa: D401
         return self._state_size
 
+    @staticmethod
     def _idx_to_bit(idx: int) -> int:
         """
         Row‑major array index 0..63  →  bit index 0..63 used by _BitBoard.
@@ -457,6 +458,44 @@ class OthelloGameNew(Game):
 
     def get_opponent(self, player):
         return -player
+
+    def print_board(self,
+                    state: np.ndarray,
+                    player: int,
+                    ply: int | None = None) -> None:
+        """
+        Nicely formats an 8×8 Othello position.
+
+        Parameters
+        ----------
+        state  : (8, 8) array with values { 1, -1, 0 }
+        player : +1 → Black to move,  -1 → White to move
+        ply    : current half-move (optional, only for info line)
+
+        Example output
+        --------------
+        a b c d e f g h
+        1 O . X X X X X X
+        2 O O X X O O X O   WHITE to move
+        3 O O X O X X O O   ply 59 2 empties
+        4 O X X O X X O O   BLACK: 28 WHITE: 34
+        5 O X O X O O O O
+        6 O O X O X O O O
+        7 O X O O O O O O
+        8 . . . . . . . .
+        """
+        # row/col labels ---------------------------------------------------
+        lines = ["  a b c d e f g h"]
+
+        # translate board --------------------------------------------------
+        to_ch = OthelloGameNew.square_content
+        for r in range(8):
+            row = [str(r + 1)]
+            for c in range(8):
+                row.append(to_ch[-int(state[r, c])])
+            lines.append(" ".join(row))
+
+        print("\n".join(lines))
 
 
 def get_random_symmetry(state: np.ndarray, pi: np.ndarray):
