@@ -1,4 +1,6 @@
 # alphaZero-Othello
+[![Docker](https://img.shields.io/badge/Docker-GHCR-blue)](https://github.com/users/AfoninAndrei/packages/container/package/alphazero-othello)
+
 Implementation of AlphaZero for the Othello game from scratch
 
 ## 📖 Learn More
