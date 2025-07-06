@@ -56,6 +56,7 @@ open -a XQuartz
 # Enable: ✅ "Allow connections from network clients"
 
 # 4. Allow local connections (in terminal)
+export DISPLAY=:0
 /opt/X11/bin/xhost +localhost
 ```
 
